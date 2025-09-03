@@ -397,7 +397,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """Обробник помилок"""
     logger.error(f"Помилка: {context.error}")
 
-async def main():
+def main():
     """Основна функція запуску бота"""
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN не встановлений!")
@@ -414,6 +414,10 @@ async def main():
     logger.info("Запускаю бота...")
     
     try:
+        # Створюємо новий event loop для кожного запуску
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
         logger.info("Telegram додаток створено успішно!")
         
@@ -422,16 +426,22 @@ async def main():
         application.add_error_handler(error_handler)
         
         logger.info("Підключаюся до Google Sheets...")
-        await restaurant_bot.init_google_sheets()
+        loop.run_until_complete(restaurant_bot.init_google_sheets())
         
         logger.info("Всі сервіси підключено! Бот готовий до роботи!")
         
-        await application.run_polling(drop_pending_updates=True)
+        # Запускаємо polling
+        loop.run_until_complete(application.run_polling(drop_pending_updates=True))
         
     except KeyboardInterrupt:
         logger.info("Бот зупинено користувачем")
     except Exception as e:
         logger.error(f"Критична помилка: {e}")
+    finally:
+        try:
+            loop.close()
+        except:
+            pass
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
