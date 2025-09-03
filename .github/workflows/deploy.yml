@@ -51,10 +51,7 @@ jobs:
           --platform managed \
           --region ${{ env.REGION }} \
           --allow-unauthenticated \
-          --set-env-vars="TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}" \
-          --set-env-vars="OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" \
-          --set-env-vars="GOOGLE_CREDENTIALS_JSON=${{ secrets.GOOGLE_CREDENTIALS_JSON }}" \
-          --set-env-vars="GOOGLE_SHEET_URL=${{ secrets.GOOGLE_SHEET_URL }}" \
+          --update-env-vars TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}",OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}",GOOGLE_CREDENTIALS_JSON="${{ secrets.GOOGLE_CREDENTIALS_JSON }}",GOOGLE_SHEET_URL="${{ secrets.GOOGLE_SHEET_URL }}" \
           --memory=1Gi \
           --cpu=1 \
           --timeout=300 \
