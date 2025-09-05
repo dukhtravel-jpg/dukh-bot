@@ -116,7 +116,7 @@ class RestaurantBot:
                 self.restaurants_data = FALLBACK_RESTAURANTS
                 
         except Exception as e:
-            logger.error(f"Помилка підключення до Google Sheets: {e}")
+            logger.error(f"Детальна помилка Google Sheets: {type(e).__name__}: {str(e)}")
             logger.info("Використовую тестові дані ресторанів")
             self.restaurants_data = FALLBACK_RESTAURANTS
             
