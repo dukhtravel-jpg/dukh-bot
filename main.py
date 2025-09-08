@@ -627,8 +627,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(rating_text, parse_mode='HTML')
             
         else:
-            await update.message.reply_text("Вибачте, не знайшов закладів з потрібними стравами. Спробуйте змінити запит або вказати конкретну страву.")
-            logger.warning(f"⚠️ Не знайдено рекомендацій для користувача {user_id}")
+            # Генеруємо персоналізоване повідомлення про відсутність страви
+            not_found_message = restaurant_bot._get_dish_not_found_message(user_request)
+            await update.message.reply_text(not_found_message)
+            
+            # Логуємо "невдалий" запит для статистики
+            await restaurant_bot.log_request(user_id, user_request, "Страва не знайдена")
+            
+            # Пропонуємо почати заново
+            await update.message.reply_text("Напишіть /start, щоб спробувати знайти щось інше!")
+            
+            # Очищуємо стан користувача
+            user_states[user_id] = "completed"
+            
+            logger.warning(f"⚠️ Не знайдено закладів з потрібною стравою для користувача {user_id}")
     
     else:
         # Якщо користувач написав щось інше в неправильному стані
@@ -642,7 +654,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     # Список адміністраторів (додайте свій user_id)
-    admin_ids = [980047923]  # Замініть на свій Telegram user_id
+    admin_ids = [123456789]  # Замініть на свій Telegram user_id
     
     if user_id not in admin_ids:
         await update.message.reply_text("У вас немає доступу до статистики")
