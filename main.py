@@ -343,7 +343,6 @@ class RestaurantBot:
                 "menu_url": chosen_restaurant.get('menu_url', ''),
                 "photo": photo_url
             }
-            
         except asyncio.TimeoutError:
             logger.error("⏰ Timeout при запиті до OpenAI, використовую резервний алгоритм")
             return self._fallback_selection_dict(user_request)
