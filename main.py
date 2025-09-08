@@ -4,6 +4,7 @@ from typing import Dict, Optional
 import asyncio
 import json
 import re
+from datetime import datetime
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -22,15 +23,19 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 GOOGLE_CREDENTIALS_JSON = os.getenv('GOOGLE_CREDENTIALS_JSON')
 GOOGLE_SHEET_URL = os.getenv('GOOGLE_SHEET_URL')
+ANALYTICS_SHEET_URL = os.getenv('ANALYTICS_SHEET_URL', GOOGLE_SHEET_URL)  # Можна використати ту ж таблицю
 
 # Глобальні змінні
 openai_client = None
 user_states: Dict[int, str] = {}
+user_last_recommendation: Dict[int, str] = {}  # Зберігаємо останню рекомендацію для оцінки
 
 class RestaurantBot:
     def __init__(self):
         self.restaurants_data = []
         self.google_sheets_available = False
+        self.analytics_sheet = None
+        self.gc = None
     
     def _convert_google_drive_url(self, url: str) -> str:
         """Перетворює Google Drive посилання в пряме посилання для зображення"""
@@ -55,15 +60,17 @@ class RestaurantBot:
             
         try:
             scope = [
-                "https://www.googleapis.com/auth/spreadsheets.readonly",
+                "https://www.googleapis.com/auth/spreadsheets",  # Змінено на повний доступ
                 "https://www.googleapis.com/auth/drive.readonly"
             ]
             
             credentials_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
             creds = Credentials.from_service_account_info(credentials_dict, scopes=scope)
             
-            gc = gspread.authorize(creds)
-            google_sheet = gc.open_by_url(GOOGLE_SHEET_URL)
+            self.gc = gspread.authorize(creds)
+            
+            # Завантажуємо дані ресторанів
+            google_sheet = self.gc.open_by_url(GOOGLE_SHEET_URL)
             worksheet = google_sheet.sheet1
             
             records = worksheet.get_all_records()
@@ -74,10 +81,147 @@ class RestaurantBot:
                 logger.info(f"✅ Завантажено {len(self.restaurants_data)} закладів з Google Sheets")
             else:
                 logger.warning("Google Sheets порожній")
+            
+            # Ініціалізуємо аналітичну таблицю
+            await self.init_analytics_sheet()
                 
         except Exception as e:
             logger.error(f"Детальна помилка Google Sheets: {type(e).__name__}: {str(e)}")
+    
+    async def init_analytics_sheet(self):
+        """Ініціалізація аналітичної таблиці"""
+        try:
+            # Відкриваємо таблицю з аналітикою (може бути та ж сама або окрема)
+            analytics_sheet = self.gc.open_by_url(ANALYTICS_SHEET_URL)
             
+            # Перевіряємо чи існує лист "Analytics"
+            try:
+                self.analytics_sheet = analytics_sheet.worksheet("Analytics")
+                logger.info("✅ Знайдено існуючий лист Analytics")
+            except gspread.WorksheetNotFound:
+                # Створюємо новий лист
+                self.analytics_sheet = analytics_sheet.add_worksheet(title="Analytics", rows="1000", cols="10")
+                logger.info("✅ Створено новий лист Analytics")
+                
+                # Додаємо заголовки
+                headers = [
+                    "Timestamp", "User ID", "User Request", "Restaurant Name", 
+                    "Rating", "Date", "Time"
+                ]
+                self.analytics_sheet.append_row(headers)
+                logger.info("✅ Додано заголовки до Analytics")
+            
+            # Перевіряємо чи існує лист "Summary"
+            try:
+                self.summary_sheet = analytics_sheet.worksheet("Summary")
+                logger.info("✅ Знайдено існуючий лист Summary")
+            except gspread.WorksheetNotFound:
+                # Створюємо лист зі статистикою
+                self.summary_sheet = analytics_sheet.add_worksheet(title="Summary", rows="100", cols="5")
+                logger.info("✅ Створено новий лист Summary")
+                
+                # Додаємо початкові дані
+                summary_data = [
+                    ["Метрика", "Значення", "Останнє оновлення"],
+                    ["Загальна кількість запитів", "0", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+                    ["Кількість унікальних користувачів", "0", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+                    ["Середня оцінка відповідності", "0", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+                    ["Кількість оцінок", "0", datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
+                ]
+                
+                for row in summary_data:
+                    self.summary_sheet.append_row(row)
+                    
+                logger.info("✅ Додано початкові дані до Summary")
+                
+        except Exception as e:
+            logger.error(f"Помилка ініціалізації Analytics: {e}")
+            self.analytics_sheet = None
+    
+    async def log_request(self, user_id: int, user_request: str, restaurant_name: str, rating: Optional[int] = None):
+        """Логування запиту до аналітичної таблиці"""
+        if not self.analytics_sheet:
+            logger.warning("Analytics sheet не доступний")
+            return
+            
+        try:
+            now = datetime.now()
+            timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+            date = now.strftime("%Y-%m-%d")
+            time = now.strftime("%H:%M:%S")
+            
+            row_data = [
+                timestamp,
+                str(user_id),
+                user_request,
+                restaurant_name,
+                str(rating) if rating else "",
+                date,
+                time
+            ]
+            
+            self.analytics_sheet.append_row(row_data)
+            logger.info(f"📊 Записано до Analytics: {user_id} - {restaurant_name} - Оцінка: {rating}")
+            
+            # Оновлюємо статистику
+            await self.update_summary_stats()
+            
+        except Exception as e:
+            logger.error(f"Помилка логування: {e}")
+    
+    async def update_summary_stats(self):
+        """Оновлення зведеної статистики"""
+        if not self.analytics_sheet or not self.summary_sheet:
+            return
+            
+        try:
+            # Отримуємо всі записи з Analytics
+            all_records = self.analytics_sheet.get_all_records()
+            
+            if not all_records:
+                return
+            
+            # Рахуємо статистику
+            total_requests = len(all_records)
+            unique_users = len(set(record['User ID'] for record in all_records))
+            
+            # Рахуємо середню оцінку (тільки для записів з оцінками)
+            ratings = [int(record['Rating']) for record in all_records if record['Rating'] and str(record['Rating']).isdigit()]
+            avg_rating = sum(ratings) / len(ratings) if ratings else 0
+            rating_count = len(ratings)
+            
+            # Середня кількість запитів на користувача
+            avg_requests_per_user = total_requests / unique_users if unique_users > 0 else 0
+            
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Оновлюємо Summary лист
+            self.summary_sheet.update('B2', str(total_requests))
+            self.summary_sheet.update('C2', timestamp)
+            
+            self.summary_sheet.update('B3', str(unique_users))
+            self.summary_sheet.update('C3', timestamp)
+            
+            self.summary_sheet.update('B4', f"{avg_rating:.2f}")
+            self.summary_sheet.update('C4', timestamp)
+            
+            self.summary_sheet.update('B5', str(rating_count))
+            self.summary_sheet.update('C5', timestamp)
+            
+            # Додаємо нову метрику
+            try:
+                self.summary_sheet.update('A6', "Середня кількість запитів на користувача")
+                self.summary_sheet.update('B6', f"{avg_requests_per_user:.2f}")
+                self.summary_sheet.update('C6', timestamp)
+            except:
+                # Якщо рядок не існує, додаємо його
+                self.summary_sheet.append_row(["Середня кількість запитів на користувача", f"{avg_requests_per_user:.2f}", timestamp])
+            
+            logger.info(f"📈 Оновлено статистику: Запитів: {total_requests}, Користувачів: {unique_users}, Середня оцінка: {avg_rating:.2f}")
+            
+        except Exception as e:
+            logger.error(f"Помилка оновлення статистики: {e}")
+
     async def get_recommendation(self, user_request: str) -> Optional[Dict]:
         """Отримання рекомендації через OpenAI з урахуванням меню"""
         try:
@@ -120,7 +264,7 @@ class RestaurantBot:
                 "Якщо запит про романтику → обирай інтимну атмосферу",
                 "Якщо згадані діти/сім'я → обирай сімейні заклади", 
                 "Якщо швидкий перекус → обирай casual формат",
-                "Якщо особлива кухня → враховуй тип кухні",
+                "Якщо особлива кухня → врахуй тип кухні",
                 "Якщо святкування → обирай просторні заклади"
             ]
             random.shuffle(examples)
@@ -378,24 +522,64 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Напишіть /start, щоб почати")
         return
     
-    user_request = update.message.text
-    logger.info(f"🔍 Користувач {user_id} написав: {user_request}")
+    user_text = update.message.text
     
-    # Показуємо, що шукаємо
-    processing_message = await update.message.reply_text("🔍 Шукаю ідеальний ресторан для вас...")
+    # Перевіряємо чи це оцінка (число від 1 до 10)
+    if user_states[user_id] == "waiting_rating" and user_text.isdigit():
+        rating = int(user_text)
+        if 1 <= rating <= 10:
+            # Зберігаємо оцінку
+            restaurant_name = user_last_recommendation.get(user_id, "Невідомий ресторан")
+            
+            # Логуємо оцінку до бази даних
+            await restaurant_bot.log_request(user_id, "Оцінка", restaurant_name, rating)
+            
+            # Відповідаємо користувачу
+            await update.message.reply_text(
+                f"Дякую за оцінку! Ви поставили {rating}/10 ⭐\n\n"
+                "Напишіть /start, щоб знайти ще один ресторан!"
+            )
+            
+            # Очищуємо стан користувача
+            user_states[user_id] = "completed"
+            if user_id in user_last_recommendation:
+                del user_last_recommendation[user_id]
+            
+            logger.info(f"⭐ Користувач {user_id} оцінив {restaurant_name} на {rating}/10")
+            return
+        else:
+            await update.message.reply_text("Будь ласка, напишіть число від 1 до 10")
+            return
     
-    # Отримуємо рекомендацію
-    recommendation = await restaurant_bot.get_recommendation(user_request)
-    
-    # Видаляємо повідомлення "шукаю"
-    try:
-        await processing_message.delete()
-    except:
-        pass
-    
-    if recommendation:
-        # Готуємо основну інформацію
-        response_text = f"""🏠 <b>{recommendation['name']}</b>
+    # Обробляємо звичайний запит ресторану
+    if user_states[user_id] == "waiting_request":
+        user_request = user_text
+        logger.info(f"🔍 Користувач {user_id} написав: {user_request}")
+        
+        # Показуємо, що шукаємо
+        processing_message = await update.message.reply_text("🔍 Шукаю ідеальний ресторан для вас...")
+        
+        # Отримуємо рекомендацію
+        recommendation = await restaurant_bot.get_recommendation(user_request)
+        
+        # Видаляємо повідомлення "шукаю"
+        try:
+            await processing_message.delete()
+        except:
+            pass
+        
+        if recommendation:
+            restaurant_name = recommendation['name']
+            
+            # Логуємо запит до бази даних (без оцінки поки що)
+            await restaurant_bot.log_request(user_id, user_request, restaurant_name)
+            
+            # Зберігаємо інформацію для майбутньої оцінки
+            user_last_recommendation[user_id] = restaurant_name
+            user_states[user_id] = "waiting_rating"
+            
+            # Готуємо основну інформацію
+            response_text = f"""🏠 <b>{recommendation['name']}</b>
 
 📍 <b>Адреса:</b> {recommendation['address']}
 
@@ -403,42 +587,95 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ✨ <b>Атмосфера:</b> {recommendation['vibe']}"""
 
-        # Додаємо ТІЛЬКИ посилання на меню (без тексту меню)
-        menu_url = recommendation.get('menu_url', '')
-        if menu_url and menu_url.startswith('http'):
-            response_text += f"\n\n📋 <a href='{menu_url}'>Переглянути меню</a>"
+            # Додаємо ТІЛЬКИ посилання на меню (без тексту меню)
+            menu_url = recommendation.get('menu_url', '')
+            if menu_url and menu_url.startswith('http'):
+                response_text += f"\n\n📋 <a href='{menu_url}'>Переглянути меню</a>"
 
-        # Перевіряємо чи є фото
-        photo_url = recommendation.get('photo', '')
-        
-        if photo_url and photo_url.startswith('http'):
-            # Надсилаємо фото як медіафайл з підписом
-            try:
-                logger.info(f"📸 Спроба надіслати фото: {photo_url}")
-                await update.message.reply_photo(
-                    photo=photo_url,
-                    caption=response_text,
-                    parse_mode='HTML'
-                )
-                logger.info(f"✅ Надіслано рекомендацію з фото: {recommendation['name']}")
-            except Exception as photo_error:
-                logger.warning(f"⚠️ Не вдалося надіслати фото: {photo_error}")
-                logger.warning(f"📸 Посилання на фото: {photo_url}")
-                # Якщо фото не завантажується, надсилаємо текст без фото
-                response_text += f"\n\n📸 <a href='{photo_url}'>Переглянути фото ресторану</a>"
+            # Перевіряємо чи є фото
+            photo_url = recommendation.get('photo', '')
+            
+            if photo_url and photo_url.startswith('http'):
+                # Надсилаємо фото як медіафайл з підписом
+                try:
+                    logger.info(f"📸 Спроба надіслати фото: {photo_url}")
+                    await update.message.reply_photo(
+                        photo=photo_url,
+                        caption=response_text,
+                        parse_mode='HTML'
+                    )
+                    logger.info(f"✅ Надіслано рекомендацію з фото: {recommendation['name']}")
+                except Exception as photo_error:
+                    logger.warning(f"⚠️ Не вдалося надіслати фото: {photo_error}")
+                    logger.warning(f"📸 Посилання на фото: {photo_url}")
+                    # Якщо фото не завантажується, надсилаємо текст без фото
+                    response_text += f"\n\n📸 <a href='{photo_url}'>Переглянути фото ресторану</a>"
+                    await update.message.reply_text(response_text, parse_mode='HTML')
+                    logger.info(f"✅ Надіслано рекомендацію з посиланням на фото: {recommendation['name']}")
+            else:
+                # Надсилаємо тільки текст якщо фото немає
                 await update.message.reply_text(response_text, parse_mode='HTML')
-                logger.info(f"✅ Надіслано рекомендацію з посиланням на фото: {recommendation['name']}")
+                logger.info(f"✅ Надіслано текстову рекомендацію: {recommendation['name']}")
+            
+            # Просимо оцінити
+            rating_text = (
+                "⭐ <b>Оціни відповідність закладу від 1 до 10</b>\n"
+                "(напиши цифру в чат)\n\n"
+                "1 - зовсім не підходить\n"
+                "10 - ідеально підходить"
+            )
+            await update.message.reply_text(rating_text, parse_mode='HTML')
+            
         else:
-            # Надсилаємо тільки текст якщо фото немає
-            await update.message.reply_text(response_text, parse_mode='HTML')
-            logger.info(f"✅ Надіслано текстову рекомендацію: {recommendation['name']}")
-    else:
-        await update.message.reply_text("Вибачте, не знайшов закладів з потрібними стравами. Спробуйте змінити запит або вказати конкретну страву.")
-        logger.warning(f"⚠️ Не знайдено рекомендацій для користувача {user_id}")
+            await update.message.reply_text("Вибачте, не знайшов закладів з потрібними стравами. Спробуйте змінити запит або вказати конкретну страву.")
+            logger.warning(f"⚠️ Не знайдено рекомендацій для користувача {user_id}")
     
-    # Прибираємо стан користувача і пропонуємо почати заново
-    del user_states[user_id]
-    await update.message.reply_text("Напишіть /start, щоб почати знову")
+    else:
+        # Якщо користувач написав щось інше в неправильному стані
+        if user_states[user_id] == "waiting_rating":
+            await update.message.reply_text("Будь ласка, оцініть попередню рекомендацію числом від 1 до 10")
+        else:
+            await update.message.reply_text("Напишіть /start, щоб почати знову")
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда для перегляду статистики (тільки для адміністраторів)"""
+    user_id = update.effective_user.id
+    
+    # Список адміністраторів (додайте свій user_id)
+    admin_ids = [980047923]  # Замініть на свій Telegram user_id
+    
+    if user_id not in admin_ids:
+        await update.message.reply_text("У вас немає доступу до статистики")
+        return
+    
+    try:
+        if not restaurant_bot.summary_sheet:
+            await update.message.reply_text("Статистика недоступна")
+            return
+        
+        # Отримуємо дані зі Summary листа
+        summary_data = restaurant_bot.summary_sheet.get_all_values()
+        
+        if len(summary_data) < 6:
+            await update.message.reply_text("Недостатньо даних для статистики")
+            return
+        
+        # Формуємо повідомлення зі статистикою
+        stats_text = f"""📊 <b>Статистика бота</b>
+
+📈 Загальна кількість запитів: <b>{summary_data[1][1]}</b>
+👥 Кількість унікальних користувачів: <b>{summary_data[2][1]}</b>
+⭐ Середня оцінка відповідності: <b>{summary_data[3][1]}</b>
+🔢 Кількість оцінок: <b>{summary_data[4][1]}</b>
+📊 Середня кількість запитів на користувача: <b>{summary_data[5][1]}</b>
+
+🕐 Останнє оновлення: {summary_data[1][2]}"""
+        
+        await update.message.reply_text(stats_text, parse_mode='HTML')
+        
+    except Exception as e:
+        logger.error(f"Помилка отримання статистики: {e}")
+        await update.message.reply_text("Помилка при отриманні статистики")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """Обробник помилок"""
@@ -469,10 +706,11 @@ def main():
         logger.info("✅ Telegram додаток створено успішно!")
         
         application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("stats", stats_command))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         application.add_error_handler(error_handler)
         
-        logger.info("🔗 Підключаюся до Google Sheets...")
+        logger.info("🔗 Підключаюсь до Google Sheets...")
         loop.run_until_complete(restaurant_bot.init_google_sheets())
         
         logger.info("✅ Всі сервіси підключено! Бот готовий до роботи!")
