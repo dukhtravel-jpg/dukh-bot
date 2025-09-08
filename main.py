@@ -463,19 +463,25 @@ class RestaurantBot:
         """Резервний алгоритм що повертає словник"""
         if not self.restaurants_data:
             logger.error("❌ Немає даних про ресторани для fallback")
-            return {
-                "name": "Ресторан недоступний",
-                "address": "Спробуйте пізніше",
-                "socials": "",
-                "vibe": "",
-                "aim": "",
-                "cuisine": "",
-                "menu": "",
-                "menu_url": "",
-                "photo": ""
-            }
+            return None  # Змінено: повертаємо None замість заглушки
             
-        chosen = self._smart_fallback_selection(user_request, self.restaurants_data)
+        # ВАЖЛИВО: перевіряємо чи це запит конкретної страви
+        filter_result = self._filter_by_menu(user_request, self.restaurants_data)
+        
+        if not filter_result["found_food"]:
+            logger.error("❌ FALLBACK: Страва не знайдена навіть в резервному алгоритмі!")
+            return None  # Повертаємо None, щоб показати повідомлення про відсутність страви
+        
+        filtered_restaurants = filter_result["restaurants"]
+        if not filtered_restaurants:
+            logger.error("❌ FALLBACK: Список відфільтрованих ресторанів порожній!")
+            return None
+            
+        chosen = self._smart_fallback_selection(user_request, filtered_restaurants)
+        
+        if chosen is None:
+            logger.error("❌ FALLBACK: Smart fallback також повернув None!")
+            return None
         
         # Перетворюємо Google Drive посилання на фото
         photo_url = chosen.get('photo', '')
