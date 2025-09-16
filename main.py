@@ -29,6 +29,7 @@ ANALYTICS_SHEET_URL = os.getenv('ANALYTICS_SHEET_URL', GOOGLE_SHEET_URL)  # Мо
 openai_client = None
 user_states: Dict[int, str] = {}
 user_last_recommendation: Dict[int, str] = {}  # Зберігаємо останню рекомендацію для оцінки
+user_rating_data: Dict[int, Dict] = {}  # Зберігаємо дані для пояснення оцінки
 
 class RestaurantBot:
     def __init__(self):
@@ -94,22 +95,22 @@ class RestaurantBot:
             # Відкриваємо таблицю з аналітикою (може бути та ж сама або окрема)
             analytics_sheet = self.gc.open_by_url(ANALYTICS_SHEET_URL)
             
-            # Перевіряємо чи існує лист "Analytics"
+            # Перевіряємо чи існує лист "analytics"
             try:
-                self.analytics_sheet = analytics_sheet.worksheet("Analytics")
-                logger.info("✅ Знайдено існуючий лист Analytics")
+                self.analytics_sheet = analytics_sheet.worksheet("analytics")
+                logger.info("✅ Знайдено існуючий лист analytics")
             except gspread.WorksheetNotFound:
                 # Створюємо новий лист
-                self.analytics_sheet = analytics_sheet.add_worksheet(title="Analytics", rows="1000", cols="10")
-                logger.info("✅ Створено новий лист Analytics")
+                self.analytics_sheet = analytics_sheet.add_worksheet(title="analytics", rows="1000", cols="12")
+                logger.info("✅ Створено новий лист analytics")
                 
-                # Додаємо заголовки
+                # Додаємо заголовки з новою колонкою для пояснення
                 headers = [
                     "Timestamp", "User ID", "User Request", "Restaurant Name", 
-                    "Rating", "Date", "Time"
+                    "Rating", "Rating Explanation", "Date", "Time"
                 ]
                 self.analytics_sheet.append_row(headers)
-                logger.info("✅ Додано заголовки до Analytics")
+                logger.info("✅ Додано заголовки до analytics")
             
             # Перевіряємо чи існує лист "Summary"
             try:
@@ -138,7 +139,7 @@ class RestaurantBot:
             logger.error(f"Помилка ініціалізації Analytics: {e}")
             self.analytics_sheet = None
     
-    async def log_request(self, user_id: int, user_request: str, restaurant_name: str, rating: Optional[int] = None):
+    async def log_request(self, user_id: int, user_request: str, restaurant_name: str, rating: Optional[int] = None, explanation: str = ""):
         """Логування запиту до аналітичної таблиці"""
         if not self.analytics_sheet:
             logger.warning("Analytics sheet не доступний")
@@ -156,12 +157,13 @@ class RestaurantBot:
                 user_request,
                 restaurant_name,
                 str(rating) if rating else "",
+                explanation,  # Додаємо пояснення оцінки
                 date,
                 time
             ]
             
             self.analytics_sheet.append_row(row_data)
-            logger.info(f"📊 Записано до Analytics: {user_id} - {restaurant_name} - Оцінка: {rating}")
+            logger.info(f"📊 Записано до Analytics: {user_id} - {restaurant_name} - Оцінка: {rating} - Пояснення: {explanation[:50]}...")
             
             # Оновлюємо статистику
             await self.update_summary_stats()
@@ -264,7 +266,7 @@ class RestaurantBot:
                 "Якщо запит про романтику → обирай інтимну атмосферу",
                 "Якщо згадані діти/сім'я → обирай сімейні заклади", 
                 "Якщо швидкий перекус → обирай casual формат",
-                "Якщо особлива кухня → врахуй тип кухні",
+                "Якщо особлива кухня → враховуй тип кухні",
                 "Якщо святкування → обирай просторні заклади"
             ]
             random.shuffle(examples)
@@ -524,35 +526,73 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_text = update.message.text
     
-    # Перевіряємо чи це оцінка (число від 1 до 10)
-    if user_states[user_id] == "waiting_rating" and user_text.isdigit():
-        rating = int(user_text)
-        if 1 <= rating <= 10:
-            # Зберігаємо оцінку
-            restaurant_name = user_last_recommendation.get(user_id, "Невідомий ресторан")
-            
-            # Логуємо оцінку до бази даних
-            await restaurant_bot.log_request(user_id, "Оцінка", restaurant_name, rating)
+    # Перевіряємо стан користувача
+    current_state = user_states[user_id]
+    
+    # Обробляємо пояснення оцінки
+    if current_state == "waiting_explanation":
+        explanation = user_text
+        rating_data = user_rating_data.get(user_id, {})
+        
+        if rating_data:
+            # Логуємо повний запис з поясненням
+            await restaurant_bot.log_request(
+                user_id, 
+                rating_data['user_request'], 
+                rating_data['restaurant_name'], 
+                rating_data['rating'], 
+                explanation
+            )
             
             # Відповідаємо користувачу
             await update.message.reply_text(
-                f"Дякую за оцінку! Ви поставили {rating}/10 ⭐\n\n"
-                "Напишіть /start, щоб знайти ще один ресторан!"
+                f"Дякую за детальну оцінку! 🙏\n\n"
+                f"Ваша оцінка: {rating_data['rating']}/10\n"
+                f"Пояснення записано в базу даних.\n\n"
+                f"Напишіть /start, щоб знайти ще один ресторан!"
             )
             
             # Очищуємо стан користувача
             user_states[user_id] = "completed"
             if user_id in user_last_recommendation:
                 del user_last_recommendation[user_id]
+            if user_id in user_rating_data:
+                del user_rating_data[user_id]
             
-            logger.info(f"⭐ Користувач {user_id} оцінив {restaurant_name} на {rating}/10")
+            logger.info(f"💬 Користувач {user_id} надав пояснення оцінки: {explanation[:100]}...")
+            return
+    
+    # Перевіряємо чи це оцінка (число від 1 до 10)
+    if current_state == "waiting_rating" and user_text.isdigit():
+        rating = int(user_text)
+        if 1 <= rating <= 10:
+            # Зберігаємо дані для пояснення
+            restaurant_name = user_last_recommendation.get(user_id, "Невідомий ресторан")
+            user_rating_data[user_id] = {
+                'rating': rating,
+                'restaurant_name': restaurant_name,
+                'user_request': 'Оцінка'  # Можна зберігати оригінальний запит якщо потрібно
+            }
+            
+            # Переводимо користувача в стан очікування пояснення
+            user_states[user_id] = "waiting_explanation"
+            
+            # НОВА ФУНКЦІЯ: Запитуємо пояснення оцінки
+            await update.message.reply_text(
+                f"Дякую за оцінку {rating}/10! ⭐\n\n"
+                f"🤔 <b>Чи можеш пояснити чому така оцінка?</b>\n"
+                f"Напиши, що сподобалось або не сподобалось у рекомендації.",
+                parse_mode='HTML'
+            )
+            
+            logger.info(f"⭐ Користувач {user_id} оцінив {restaurant_name} на {rating}/10, очікуємо пояснення")
             return
         else:
             await update.message.reply_text("Будь ласка, напишіть число від 1 до 10")
             return
     
     # Обробляємо звичайний запит ресторану
-    if user_states[user_id] == "waiting_request":
+    if current_state == "waiting_request":
         user_request = user_text
         logger.info(f"🔍 Користувач {user_id} написав: {user_request}")
         
@@ -620,7 +660,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Просимо оцінити
             rating_text = (
                 "⭐ <b>Оціни відповідність закладу від 1 до 10</b>\n"
-                "(напиши цифру в чат)\n\n"
+                "(напиши цифру в чаті)\n\n"
                 "1 - зовсім не підходить\n"
                 "10 - ідеально підходить"
             )
@@ -632,8 +672,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     else:
         # Якщо користувач написав щось інше в неправильному стані
-        if user_states[user_id] == "waiting_rating":
+        if current_state == "waiting_rating":
             await update.message.reply_text("Будь ласка, оцініть попередню рекомендацію числом від 1 до 10")
+        elif current_state == "waiting_explanation":
+            # Це вже оброблено вище
+            pass
         else:
             await update.message.reply_text("Напишіть /start, щоб почати знову")
 
@@ -710,7 +753,7 @@ def main():
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         application.add_error_handler(error_handler)
         
-        logger.info("🔗 Підключаюсь до Google Sheets...")
+        logger.info("🔗 Підключаюся до Google Sheets...")
         loop.run_until_complete(restaurant_bot.init_google_sheets())
         
         logger.info("✅ Всі сервіси підключено! Бот готовий до роботи!")
