@@ -94,15 +94,41 @@ class RestaurantBot:
         try:
             # Відкриваємо таблицю з аналітикою (може бути та ж сама або окрема)
             analytics_sheet = self.gc.open_by_url(ANALYTICS_SHEET_URL)
+            logger.info(f"📊 Відкрито таблицю для analytics: {ANALYTICS_SHEET_URL}")
             
-            # Перевіряємо чи існує лист "analytics"
+            # Виводимо список всіх існуючих аркушів для діагностики
+            existing_sheets = [worksheet.title for worksheet in analytics_sheet.worksheets()]
+            logger.info(f"📋 Існуючі аркуші: {existing_sheets}")
+            
+            # Перевіряємо чи існує лист "Analytics" (з великої літери)
             try:
-                self.analytics_sheet = analytics_sheet.worksheet("analytics")
-                logger.info("✅ Знайдено існуючий лист analytics")
+                self.analytics_sheet = analytics_sheet.worksheet("Analytics")
+                logger.info("✅ Знайдено існуючий лист Analytics")
+                
+                # Перевіряємо чи є заголовки з поясненням
+                try:
+                    headers = self.analytics_sheet.row_values(1)
+                    if "Rating Explanation" not in headers:
+                        logger.info("🔧 Додаю колонку Rating Explanation до існуючого аркуша")
+                        # Знаходимо позицію після Rating
+                        if "Rating" in headers:
+                            rating_index = headers.index("Rating") + 1
+                            # Вставляємо нову колонку після Rating
+                            self.analytics_sheet.insert_cols([[]], col=rating_index + 2)
+                            self.analytics_sheet.update_cell(1, rating_index + 2, "Rating Explanation")
+                        else:
+                            # Якщо структура відрізняється, додаємо в кінець
+                            next_col = len(headers) + 1
+                            self.analytics_sheet.update_cell(1, next_col, "Rating Explanation")
+                except Exception as header_error:
+                    logger.warning(f"⚠️ Помилка перевірки заголовків: {header_error}")
+                    
             except gspread.WorksheetNotFound:
+                logger.info("📝 Аркуш Analytics не знайдено, створюю новий...")
+                
                 # Створюємо новий лист
-                self.analytics_sheet = analytics_sheet.add_worksheet(title="analytics", rows="1000", cols="12")
-                logger.info("✅ Створено новий лист analytics")
+                self.analytics_sheet = analytics_sheet.add_worksheet(title="Analytics", rows="1000", cols="12")
+                logger.info("✅ Створено новий лист Analytics")
                 
                 # Додаємо заголовки з новою колонкою для пояснення
                 headers = [
@@ -110,7 +136,7 @@ class RestaurantBot:
                     "Rating", "Rating Explanation", "Date", "Time"
                 ]
                 self.analytics_sheet.append_row(headers)
-                logger.info("✅ Додано заголовки до analytics")
+                logger.info("✅ Додано заголовки до Analytics")
             
             # Перевіряємо чи існує лист "Summary"
             try:
@@ -134,10 +160,58 @@ class RestaurantBot:
                     self.summary_sheet.append_row(row)
                     
                 logger.info("✅ Додано початкові дані до Summary")
+            
+            # Тестуємо запис до Analytics
+            logger.info("🧪 Тестую можливість запису до Analytics...")
+            test_success = await self.test_analytics_write()
+            if test_success:
+                logger.info("✅ Тест запису до Analytics успішний!")
+            else:
+                logger.error("❌ Тест запису до Analytics не вдався!")
                 
         except Exception as e:
             logger.error(f"Помилка ініціалізації Analytics: {e}")
             self.analytics_sheet = None
+    
+    async def test_analytics_write(self):
+        """Тест запису до Analytics аркуша"""
+        if not self.analytics_sheet:
+            return False
+        
+        try:
+            # Спробуємо прочитати заголовки
+            headers = self.analytics_sheet.row_values(1)
+            logger.info(f"📋 Заголовки Analytics: {headers}")
+            
+            # Спробуємо додати тестовий запис
+            test_row = [
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "TEST_USER",
+                "TEST_REQUEST", 
+                "TEST_RESTAURANT",
+                "5",
+                "Test explanation",
+                datetime.now().strftime("%Y-%m-%d"),
+                datetime.now().strftime("%H:%M:%S")
+            ]
+            
+            self.analytics_sheet.append_row(test_row)
+            logger.info("✅ Тестовий запис додано успішно")
+            
+            # Видаляємо тестовий запис
+            all_values = self.analytics_sheet.get_all_values()
+            if len(all_values) > 1:  # Якщо є дані крім заголовків
+                last_row = len(all_values)
+                # Перевіряємо чи це наш тестовий запис
+                if "TEST_USER" in all_values[-1]:
+                    self.analytics_sheet.delete_rows(last_row)
+                    logger.info("✅ Тестовий запис видалено")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Помилка тесту запису: {e}")
+            return False
     
     async def log_request(self, user_id: int, user_request: str, restaurant_name: str, rating: Optional[int] = None, explanation: str = ""):
         """Логування запиту до аналітичної таблиці"""
