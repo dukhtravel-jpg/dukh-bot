@@ -199,7 +199,15 @@ class RestaurantBot:
     def _filter_by_establishment_type(self, user_request: str, restaurant_list):
         """Фільтрує ресторани за типом закладу"""
         user_lower = user_request.lower()
-        logger.info(f"🏢 Аналізую запит на тип закладу: '{user_request}'")
+        logger.info(f"🏢 ДІАГНОСТИКА: Аналізую запит '{user_request}'")
+        
+        # ДІАГНОСТИКА: Показуємо структуру даних
+        if restaurant_list:
+            first_restaurant = restaurant_list[0]
+            logger.info(f"🔍 ДІАГНОСТИКА: Приклад структури ресторану:")
+            logger.info(f"   Ключі: {list(first_restaurant.keys())}")
+            logger.info(f"   Тип закладу: '{first_restaurant.get('тип закладу', 'НЕ ЗНАЙДЕНО')}'")
+            logger.info(f"   Type: '{first_restaurant.get('type', 'НЕ ЗНАЙДЕНО')}'")
         
         # Визначаємо тип закладу з запиту користувача
         type_keywords = {
@@ -208,7 +216,7 @@ class RestaurantBot:
                 'establishment_types': ['ресторан']
             },
             'кав\'ярня': {
-                'user_keywords': ['кава', 'капучіно', 'латте', 'еспресо', 'кав\'ярн', 'десерт', 'тирамісу', 'круасан', 'випити кави', 'кофе'],
+                'user_keywords': ['кава', 'капучіно', 'латте', 'еспресо', 'кав\'ярн', 'десерт', 'тирамісу', 'круасан', 'випити кави', 'кофе', 'кафе'],
                 'establishment_types': ['кав\'ярня', 'кафе']
             },
             'to-go': {
@@ -227,34 +235,37 @@ class RestaurantBot:
             user_match = any(keyword in user_lower for keyword in keywords['user_keywords'])
             if user_match:
                 detected_types.extend(keywords['establishment_types'])
+                logger.info(f"🎯 ДІАГНОСТИКА: Виявлено збіг '{establishment_type}' за словами: {[kw for kw in keywords['user_keywords'] if kw in user_lower]}")
         
         # Якщо тип не визначено, не фільтруємо
         if not detected_types:
-            logger.info("🏢 Тип закладу не визначено, повертаю всі заклади")
+            logger.info("🏢 ДІАГНОСТИКА: Тип закладу не визначено, повертаю всі заклади")
             return restaurant_list
         
-        logger.info(f"🏢 Виявлено типи закладів: {detected_types}")
+        logger.info(f"🏢 ДІАГНОСТИКА: Шуканий тип(и) закладів: {detected_types}")
         
         # Фільтруємо за типом закладу
         filtered_restaurants = []
         for restaurant in restaurant_list:
-            establishment_type = restaurant.get('тип закладу', restaurant.get('type', '')).lower()
+            establishment_type = restaurant.get('тип закладу', restaurant.get('type', '')).lower().strip()
+            
+            logger.info(f"🔍 ДІАГНОСТИКА: Перевіряю '{restaurant.get('name', '')}' - тип: '{establishment_type}'")
             
             # Перевіряємо чи збігається тип закладу
-            type_match = any(detected_type.lower() in establishment_type or establishment_type in detected_type.lower() 
+            type_match = any(detected_type.lower().strip() in establishment_type or establishment_type in detected_type.lower().strip() 
                            for detected_type in detected_types)
             
             if type_match:
                 filtered_restaurants.append(restaurant)
-                logger.info(f"   ✅ {restaurant.get('name', '')}: тип '{establishment_type}' підходить")
+                logger.info(f"   ✅ ДІАГНОСТИКА: {restaurant.get('name', '')}: тип '{establishment_type}' ПІДХОДИТЬ")
             else:
-                logger.info(f"   ❌ {restaurant.get('name', '')}: тип '{establishment_type}' не підходить")
+                logger.info(f"   ❌ ДІАГНОСТИКА: {restaurant.get('name', '')}: тип '{establishment_type}' НЕ ПІДХОДИТЬ (шукаємо {detected_types})")
         
         if filtered_restaurants:
-            logger.info(f"🏢 Відфільтровано {len(filtered_restaurants)} закладів відповідного типу з {len(restaurant_list)}")
+            logger.info(f"🏢 ДІАГНОСТИКА: УСПІХ! Відфільтровано {len(filtered_restaurants)} закладів відповідного типу з {len(restaurant_list)}")
             return filtered_restaurants
         else:
-            logger.warning("⚠️ Жоден заклад не підходить за типом, повертаю всі")
+            logger.warning(f"⚠️ ДІАГНОСТИКА: ПРОБЛЕМА! Жоден заклад не підходить за типом. Повертаю всі {len(restaurant_list)} закладів")
             return restaurant_list
 
     def _filter_by_vibe(self, user_request: str, restaurant_list):
