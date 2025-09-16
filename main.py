@@ -23,13 +23,13 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 GOOGLE_CREDENTIALS_JSON = os.getenv('GOOGLE_CREDENTIALS_JSON')
 GOOGLE_SHEET_URL = os.getenv('GOOGLE_SHEET_URL')
-ANALYTICS_SHEET_URL = os.getenv('ANALYTICS_SHEET_URL', GOOGLE_SHEET_URL)  # Можна використати ту ж таблицю
+ANALYTICS_SHEET_URL = os.getenv('ANALYTICS_SHEET_URL', GOOGLE_SHEET_URL)
 
 # Глобальні змінні
 openai_client = None
 user_states: Dict[int, str] = {}
-user_last_recommendation: Dict[int, str] = {}  # Зберігаємо останню рекомендацію для оцінки
-user_rating_data: Dict[int, Dict] = {}  # Зберігаємо дані для пояснення оцінки
+user_last_recommendation: Dict[int, str] = {}
+user_rating_data: Dict[int, Dict] = {}
 
 class RestaurantBot:
     def __init__(self):
@@ -61,7 +61,7 @@ class RestaurantBot:
             
         try:
             scope = [
-                "https://www.googleapis.com/auth/spreadsheets",  # Змінено на повний доступ
+                "https://www.googleapis.com/auth/spreadsheets",
                 "https://www.googleapis.com/auth/drive.readonly"
             ]
             
@@ -92,32 +92,25 @@ class RestaurantBot:
     async def init_analytics_sheet(self):
         """Ініціалізація аналітичної таблиці"""
         try:
-            # Відкриваємо таблицю з аналітикою (може бути та ж сама або окрема)
             analytics_sheet = self.gc.open_by_url(ANALYTICS_SHEET_URL)
             logger.info(f"📊 Відкрито таблицю для analytics: {ANALYTICS_SHEET_URL}")
             
-            # Виводимо список всіх існуючих аркушів для діагностики
             existing_sheets = [worksheet.title for worksheet in analytics_sheet.worksheets()]
             logger.info(f"📋 Існуючі аркуші: {existing_sheets}")
             
-            # Перевіряємо чи існує лист "Analytics" (з великої літери)
             try:
                 self.analytics_sheet = analytics_sheet.worksheet("Analytics")
                 logger.info("✅ Знайдено існуючий лист Analytics")
                 
-                # Перевіряємо чи є заголовки з поясненням
                 try:
                     headers = self.analytics_sheet.row_values(1)
                     if "Rating Explanation" not in headers:
                         logger.info("🔧 Додаю колонку Rating Explanation до існуючого аркуша")
-                        # Знаходимо позицію після Rating
                         if "Rating" in headers:
                             rating_index = headers.index("Rating") + 1
-                            # Вставляємо нову колонку після Rating
                             self.analytics_sheet.insert_cols([[]], col=rating_index + 2)
                             self.analytics_sheet.update_cell(1, rating_index + 2, "Rating Explanation")
                         else:
-                            # Якщо структура відрізняється, додаємо в кінець
                             next_col = len(headers) + 1
                             self.analytics_sheet.update_cell(1, next_col, "Rating Explanation")
                 except Exception as header_error:
@@ -126,11 +119,9 @@ class RestaurantBot:
             except gspread.WorksheetNotFound:
                 logger.info("📝 Аркуш Analytics не знайдено, створюю новий...")
                 
-                # Створюємо новий лист
                 self.analytics_sheet = analytics_sheet.add_worksheet(title="Analytics", rows="1000", cols="12")
                 logger.info("✅ Створено новий лист Analytics")
                 
-                # Додаємо заголовки з новою колонкою для пояснення
                 headers = [
                     "Timestamp", "User ID", "User Request", "Restaurant Name", 
                     "Rating", "Rating Explanation", "Date", "Time"
@@ -138,16 +129,13 @@ class RestaurantBot:
                 self.analytics_sheet.append_row(headers)
                 logger.info("✅ Додано заголовки до Analytics")
             
-            # Перевіряємо чи існує лист "Summary"
             try:
                 self.summary_sheet = analytics_sheet.worksheet("Summary")
                 logger.info("✅ Знайдено існуючий лист Summary")
             except gspread.WorksheetNotFound:
-                # Створюємо лист зі статистикою
                 self.summary_sheet = analytics_sheet.add_worksheet(title="Summary", rows="100", cols="5")
                 logger.info("✅ Створено новий лист Summary")
                 
-                # Додаємо початкові дані
                 summary_data = [
                     ["Метрика", "Значення", "Останнє оновлення"],
                     ["Загальна кількість запитів", "0", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
@@ -161,7 +149,6 @@ class RestaurantBot:
                     
                 logger.info("✅ Додано початкові дані до Summary")
             
-            # Тестуємо запис до Analytics
             logger.info("🧪 Тестую можливість запису до Analytics...")
             test_success = await self.test_analytics_write()
             if test_success:
@@ -179,11 +166,9 @@ class RestaurantBot:
             return False
         
         try:
-            # Спробуємо прочитати заголовки
             headers = self.analytics_sheet.row_values(1)
             logger.info(f"📋 Заголовки Analytics: {headers}")
             
-            # Спробуємо додати тестовий запис
             test_row = [
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "TEST_USER",
@@ -198,11 +183,9 @@ class RestaurantBot:
             self.analytics_sheet.append_row(test_row)
             logger.info("✅ Тестовий запис додано успішно")
             
-            # Видаляємо тестовий запис
             all_values = self.analytics_sheet.get_all_values()
-            if len(all_values) > 1:  # Якщо є дані крім заголовків
+            if len(all_values) > 1:
                 last_row = len(all_values)
-                # Перевіряємо чи це наш тестовий запис
                 if "TEST_USER" in all_values[-1]:
                     self.analytics_sheet.delete_rows(last_row)
                     logger.info("✅ Тестовий запис видалено")
@@ -212,119 +195,83 @@ class RestaurantBot:
         except Exception as e:
             logger.error(f"❌ Помилка тесту запису: {e}")
             return False
-    
-    async def log_request(self, user_id: int, user_request: str, restaurant_name: str, rating: Optional[int] = None, explanation: str = ""):
-        """Логування запиту до аналітичної таблиці"""
-        if not self.analytics_sheet:
-            logger.warning("Analytics sheet не доступний")
-            return
-            
-        try:
-            now = datetime.now()
-            timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-            date = now.strftime("%Y-%m-%d")
-            time = now.strftime("%H:%M:%S")
-            
-            row_data = [
-                timestamp,
-                str(user_id),
-                user_request,
-                restaurant_name,
-                str(rating) if rating else "",
-                explanation,  # Додаємо пояснення оцінки
-                date,
-                time
-            ]
-            
-            self.analytics_sheet.append_row(row_data)
-            logger.info(f"📊 Записано до Analytics: {user_id} - {restaurant_name} - Оцінка: {rating} - Пояснення: {explanation[:50]}...")
-            
-            # Оновлюємо статистику
-            await self.update_summary_stats()
-            
-        except Exception as e:
-            logger.error(f"Помилка логування: {e}")
-    
-    async def update_summary_stats(self):
-        """Оновлення зведеної статистики"""
-        if not self.analytics_sheet or not self.summary_sheet:
-            return
-            
-        try:
-            # Отримуємо всі записи з Analytics
-            all_records = self.analytics_sheet.get_all_records()
-            
-            if not all_records:
-                return
-            
-            # Рахуємо статистику
-            total_requests = len(all_records)
-            unique_users = len(set(record['User ID'] for record in all_records))
-            
-            # Рахуємо середню оцінку (тільки для записів з оцінками)
-            ratings = [int(record['Rating']) for record in all_records if record['Rating'] and str(record['Rating']).isdigit()]
-            avg_rating = sum(ratings) / len(ratings) if ratings else 0
-            rating_count = len(ratings)
-            
-            # Середня кількість запитів на користувача
-            avg_requests_per_user = total_requests / unique_users if unique_users > 0 else 0
-            
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Оновлюємо Summary лист
-            self.summary_sheet.update('B2', str(total_requests))
-            self.summary_sheet.update('C2', timestamp)
-            
-            self.summary_sheet.update('B3', str(unique_users))
-            self.summary_sheet.update('C3', timestamp)
-            
-            self.summary_sheet.update('B4', f"{avg_rating:.2f}")
-            self.summary_sheet.update('C4', timestamp)
-            
-            self.summary_sheet.update('B5', str(rating_count))
-            self.summary_sheet.update('C5', timestamp)
-            
-            # Додаємо нову метрику
-            try:
-                self.summary_sheet.update('A6', "Середня кількість запитів на користувача")
-                self.summary_sheet.update('B6', f"{avg_requests_per_user:.2f}")
-                self.summary_sheet.update('C6', timestamp)
-            except:
-                # Якщо рядок не існує, додаємо його
-                self.summary_sheet.append_row(["Середня кількість запитів на користувача", f"{avg_requests_per_user:.2f}", timestamp])
-            
-            logger.info(f"📈 Оновлено статистику: Запитів: {total_requests}, Користувачів: {unique_users}, Середня оцінка: {avg_rating:.2f}")
-            
-        except Exception as e:
-            logger.error(f"Помилка оновлення статистики: {e}")
 
-    async def get_recommendation(self, user_request: str) -> Optional[Dict]:
-        """Отримання рекомендації через OpenAI з урахуванням меню"""
-        try:
-            # Ініціалізуємо OpenAI клієнт
-            global openai_client
-            if openai_client is None:
-                import openai
-                openai.api_key = OPENAI_API_KEY
-                openai_client = openai
-                logger.info("✅ OpenAI клієнт ініціалізовано")
+    def _filter_by_context(self, user_request: str, restaurant_list):
+        """Фільтрує ресторани за контекстом запиту"""
+        user_lower = user_request.lower()
+        logger.info(f"🎯 Аналізую запит на контекст: '{user_request}'")
+        
+        context_filters = {
+            'romantic': {
+                'user_keywords': ['романт', 'побачен', 'двох', 'інтимн', 'затишн', 'свічки', 'романс'],
+                'restaurant_keywords': ['романт', 'інтимн', 'затишн', 'для пар', 'камерн', 'приват']
+            },
+            'family': {
+                'user_keywords': ['сім', 'діт', 'родин', 'батьк', 'мам', 'дитин'],
+                'restaurant_keywords': ['сімейн', 'діт', 'родин', 'для всієї сім']
+            },
+            'business': {
+                'user_keywords': ['діл', 'зустріч', 'перегов', 'бізнес', 'робоч', 'офіс'],
+                'restaurant_keywords': ['діл', 'зустріч', 'бізнес', 'перегов', 'офіц']
+            },
+            'friends': {
+                'user_keywords': ['друз', 'компан', 'гуртом', 'весел', 'тусовк'],
+                'restaurant_keywords': ['компан', 'друз', 'молодіжн', 'весел', 'гучн']
+            },
+            'celebration': {
+                'user_keywords': ['святкув', 'день народж', 'ювіле', 'свято', 'торжеств'],
+                'restaurant_keywords': ['святков', 'просторн', 'банкет', 'торжеств', 'груп']
+            },
+            'quick': {
+                'user_keywords': ['швидк', 'перекус', 'фаст', 'поспіша', 'на швидку руку'],
+                'restaurant_keywords': ['швидк', 'casual', 'фаст', 'перекус']
+            }
+        }
+        
+        detected_contexts = []
+        for context, keywords in context_filters.items():
+            user_match = any(keyword in user_lower for keyword in keywords['user_keywords'])
+            if user_match:
+                detected_contexts.append(context)
+        
+        if not detected_contexts:
+            logger.info("📝 Контекст не визначено, повертаю всі ресторани")
+            return restaurant_list
+        
+        logger.info(f"🎯 Виявлено контекст(и): {detected_contexts}")
+        
+        filtered_restaurants = []
+        for restaurant in restaurant_list:
+            restaurant_text = f"{restaurant.get('vibe', '')} {restaurant.get('aim', '')} {restaurant.get('cuisine', '')} {restaurant.get('name', '')}".lower()
             
-            if not self.restaurants_data:
-                logger.error("❌ Немає даних про ресторани")
-                return None
+            restaurant_score = 0
+            matched_contexts = []
             
-            # Рандомізуємо порядок ресторанів для різноманітності
-            import random
-            shuffled_restaurants = self.restaurants_data.copy()
-            random.shuffle(shuffled_restaurants)
+            for context in detected_contexts:
+                context_keywords = context_filters[context]['restaurant_keywords']
+                if any(keyword in restaurant_text for keyword in context_keywords):
+                    restaurant_score += 1
+                    matched_contexts.append(context)
             
-            logger.info(f"🎲 Перемішав порядок ресторанів для різноманітності")
-            
+            if restaurant_score > 0:
+                filtered_restaurants.append((restaurant_score, restaurant, matched_contexts))
+                logger.info(f"   ✅ {restaurant.get('name', '')}: збіг по {matched_contexts}")
+            else:
+                logger.info(f"   ❌ {restaurant.get('name', '')}: не підходить за контекстом")
+        
+        if filtered_restaurants:
+            filtered_restaurants.sort(key=lambda x: x[0], reverse=True)
+            result = [item[1] for item in filtered_restaurants]
+            logger.info(f"🎯 Відфільтровано {len(result)} релевантних ресторанів з {len(restaurant_list)}")
+            return result
+        else:
+            logger.warning("⚠️ Жоден ресторан не підходить за контекстом, повертаю всі")
+            return restaurant_list
+
     def _filter_by_menu(self, user_request: str, restaurant_list):
-        """Фільтрує ресторани по меню (якщо користувач шукає конкретну страву)"""
+        """Фільтрує ресторани по меню"""
         user_lower = user_request.lower()
         
-        # Ключові слова для конкретних страв
         food_keywords = {
             'піца': [' піц', 'pizza', 'піца'],
             'паста': [' паст', 'спагеті', 'pasta'],
@@ -340,14 +287,12 @@ class RestaurantBot:
             'десерт': ['десерт', 'торт', 'тірамісу', 'морозиво']
         }
         
-        # Перевіряємо чи користувач шукає конкретну страву
         requested_dishes = []
         for dish, keywords in food_keywords.items():
             if any(keyword in user_lower for keyword in keywords):
                 requested_dishes.append(dish)
         
         if requested_dishes:
-            # Фільтруємо ресторани де є потрібні страви
             filtered_restaurants = []
             logger.info(f"🍽 Користувач шукає конкретні страви: {requested_dishes}")
             
@@ -374,14 +319,12 @@ class RestaurantBot:
                 logger.warning("⚠️ Жоден заклад не має потрібних страв, показую всі")
                 return restaurant_list
         else:
-            # Якщо не шукає конкретну страву, повертаємо всі ресторани
             logger.info("🔍 Загальний запит, аналізую всі ресторани")
             return restaurant_list
 
     async def get_recommendation(self, user_request: str) -> Optional[Dict]:
         """Отримання рекомендації через OpenAI з урахуванням меню та контексту"""
         try:
-            # Ініціалізуємо OpenAI клієнт
             global openai_client
             if openai_client is None:
                 import openai
@@ -393,20 +336,15 @@ class RestaurantBot:
                 logger.error("❌ Немає даних про ресторани")
                 return None
             
-            # Рандомізуємо порядок ресторанів для різноманітності
             import random
             shuffled_restaurants = self.restaurants_data.copy()
             random.shuffle(shuffled_restaurants)
             
             logger.info(f"🎲 Перемішав порядок ресторанів для різноманітності")
             
-            # СПОЧАТКУ фільтруємо за контекстом (романтика, сім'я тощо)
             context_filtered = self._filter_by_context(user_request, shuffled_restaurants)
-            
-            # ПОТІМ фільтруємо по меню (якщо користувач шукає конкретну страву)
             final_filtered = self._filter_by_menu(user_request, context_filtered)
             
-            # Готуємо детальний промпт для OpenAI
             restaurants_details = []
             for i, r in enumerate(final_filtered):
                 detail = f"""Варіант {i+1}:
@@ -448,7 +386,6 @@ class RestaurantBot:
                     top_p=0.9
                 )
             
-            # Виконуємо запит з timeout
             response = await asyncio.wait_for(
                 asyncio.to_thread(make_openai_request),
                 timeout=20
@@ -457,7 +394,6 @@ class RestaurantBot:
             choice_text = response.choices[0].message.content.strip()
             logger.info(f"🤖 OpenAI повна відповідь: '{choice_text}'")
             
-            # Покращений парсинг - шукаємо перше число в відповіді
             numbers = re.findall(r'\d+', choice_text)
             
             if numbers:
@@ -474,12 +410,10 @@ class RestaurantBot:
                 logger.warning("⚠️ Не знайдено чисел в відповіді, використовую резервний алгоритм")
                 chosen_restaurant = self._smart_fallback_selection(user_request, final_filtered)
             
-            # Перетворюємо Google Drive посилання на фото
             photo_url = chosen_restaurant.get('photo', '')
             if photo_url:
                 photo_url = self._convert_google_drive_url(photo_url)
             
-            # Повертаємо результат
             return {
                 "name": chosen_restaurant.get('name', 'Ресторан'),
                 "address": chosen_restaurant.get('address', 'Адреса не вказана'),
@@ -499,150 +433,12 @@ class RestaurantBot:
             logger.error(f"❌ Помилка отримання рекомендації: {e}")
             return self._fallback_selection_dict(user_request)
 
-    def _filter_by_context(self, user_request: str, restaurant_list):
-        """Фільтрує ресторани за контекстом запиту (романтика, сім'я, друзі тощо)"""
-        user_lower = user_request.lower()
-        logger.info(f"🎯 Аналізую запит на контекст: '{user_request}'")
-        
-        # Визначаємо категорії з ключовими словами
-        context_filters = {
-            'romantic': {
-                'user_keywords': ['романт', 'побачен', 'двох', 'інтимн', 'затишн', 'свічки', 'романс'],
-                'restaurant_keywords': ['романт', 'інтимн', 'затишн', 'для пар', 'камерн', 'приват']
-            },
-            'family': {
-                'user_keywords': ['сім', 'діт', 'родин', 'батьк', 'мам', 'дитин'],
-                'restaurant_keywords': ['сімейн', 'діт', 'родин', 'для всієї сім']
-            },
-            'business': {
-                'user_keywords': ['діл', 'зустріч', 'перегов', 'бізнес', 'робоч', 'офіс'],
-                'restaurant_keywords': ['діл', 'зустріч', 'бізнес', 'перегов', 'офіц']
-            },
-            'friends': {
-                'user_keywords': ['друз', 'компан', 'гуртом', 'весел', 'тусовк'],
-                'restaurant_keywords': ['компан', 'друз', 'молодіжн', 'весел', 'гучн']
-            },
-            'celebration': {
-                'user_keywords': ['святкув', 'день народж', 'ювіле', 'свято', 'торжеств'],
-                'restaurant_keywords': ['святков', 'просторн', 'банкет', 'торжеств', 'груп']
-            },
-            'quick': {
-                'user_keywords': ['швидк', 'перекус', 'фаст', 'поспіша', 'на швидку руку'],
-                'restaurant_keywords': ['швидк', 'casual', 'фаст', 'перекус']
-            }
-        }
-        
-        # Знаходимо відповідний контекст
-        detected_contexts = []
-        for context, keywords in context_filters.items():
-            user_match = any(keyword in user_lower for keyword in keywords['user_keywords'])
-            if user_match:
-                detected_contexts.append(context)
-        
-        if not detected_contexts:
-            logger.info("📝 Контекст не визначено, повертаю всі ресторани")
-            return restaurant_list
-        
-        logger.info(f"🎯 Виявлено контекст(и): {detected_contexts}")
-        
-        # Фільтруємо ресторани за контекстом
-        filtered_restaurants = []
-        for restaurant in restaurant_list:
-            # Об'єднуємо всі текстові поля ресторану для аналізу
-            restaurant_text = f"{restaurant.get('vibe', '')} {restaurant.get('aim', '')} {restaurant.get('cuisine', '')} {restaurant.get('name', '')}".lower()
-            
-            restaurant_score = 0
-            matched_contexts = []
-            
-            # Перевіряємо кожен виявлений контекст
-            for context in detected_contexts:
-                context_keywords = context_filters[context]['restaurant_keywords']
-                if any(keyword in restaurant_text for keyword in context_keywords):
-                    restaurant_score += 1
-                    matched_contexts.append(context)
-            
-            if restaurant_score > 0:
-                filtered_restaurants.append((restaurant_score, restaurant, matched_contexts))
-                logger.info(f"   ✅ {restaurant.get('name', '')}: збіг по {matched_contexts}")
-            else:
-                logger.info(f"   ❌ {restaurant.get('name', '')}: не підходить за контекстом")
-        
-        if filtered_restaurants:
-            # Сортуємо за релевантністю (кількість збігів)
-            filtered_restaurants.sort(key=lambda x: x[0], reverse=True)
-            
-            # Повертаємо тільки ресторани (без score)
-            result = [item[1] for item in filtered_restaurants]
-            
-            logger.info(f"🎯 Відфільтровано {len(result)} релевантних ресторанів з {len(restaurant_list)}")
-            return result
-        else:
-            logger.warning("⚠️ Жоден ресторан не підходить за контекстом, повертаю всі")
-            return restaurant_list
-        """Фільтрує ресторани по меню (якщо користувач шукає конкретну страву)"""
-        user_lower = user_request.lower()
-        
-        # Ключові слова для конкретних страв
-        food_keywords = {
-            'піца': [' піц', 'pizza', 'піца'],
-            'паста': [' паст', 'спагеті', 'pasta'],
-            'бургер': ['бургер', 'burger', 'гамбургер'],
-            'суші': [' суші', 'sushi', ' рол', 'ролл', 'сашімі'],
-            'салат': [' салат', 'salad'],
-            'хумус': ['хумус', 'hummus'],
-            'фалафель': ['фалафель', 'falafel'],
-            'шаурма': ['шаурм', 'shawarma'],
-            'стейк': ['стейк', 'steak', ' мясо'],
-            'риба': [' риб', 'fish', 'лосось'],
-            'курка': [' курк', 'курич', 'chicken'],
-            'десерт': ['десерт', 'торт', 'тірамісу', 'морозиво']
-        }
-        
-        # Перевіряємо чи користувач шукає конкретну страву
-        requested_dishes = []
-        for dish, keywords in food_keywords.items():
-            if any(keyword in user_lower for keyword in keywords):
-                requested_dishes.append(dish)
-        
-        if requested_dishes:
-            # Фільтруємо ресторани де є потрібні страви
-            filtered_restaurants = []
-            logger.info(f"🍽 Користувач шукає конкретні страви: {requested_dishes}")
-            
-            for restaurant in restaurant_list:
-                menu_text = restaurant.get('menu', '').lower()
-                has_requested_dish = False
-                
-                for dish in requested_dishes:
-                    dish_keywords = food_keywords[dish]
-                    if any(keyword in menu_text for keyword in dish_keywords):
-                        has_requested_dish = True
-                        logger.info(f"   ✅ {restaurant.get('name', '')} має {dish}")
-                        break
-                
-                if has_requested_dish:
-                    filtered_restaurants.append(restaurant)
-                else:
-                    logger.info(f"   ❌ {restaurant.get('name', '')} немає потрібних страв")
-            
-            if filtered_restaurants:
-                logger.info(f"📋 Відфільтровано до {len(filtered_restaurants)} закладів з потрібними стравами")
-                return filtered_restaurants
-            else:
-                logger.warning("⚠️ Жоден заклад не має потрібних страв, показую всі")
-                return restaurant_list
-        else:
-            # Якщо не шукає конкретну страву, повертаємо всі ресторани
-            logger.info("🔍 Загальний запит, аналізую всі ресторани")
-            return restaurant_list
-
     def _smart_fallback_selection(self, user_request: str, restaurant_list):
         """Резервний алгоритм з рандомізацією"""
         import random
         
         user_lower = user_request.lower()
         
-        # Ключові слова для різних категорій
         keywords_map = {
             'romantic': (['романт', 'побачен', 'двох', 'інтимн', 'затишн'], ['інтимн', 'романт', 'для пар', 'затишн']),
             'family': (['сім', 'діт', 'родин', 'батьк'], ['сімейн', 'діт', 'родин']),
@@ -652,13 +448,11 @@ class RestaurantBot:
             'celebration': (['святкув', 'день народж', 'ювіле', 'свято'], ['святков', 'простор', 'груп'])
         }
         
-        # Підраховуємо очки
         scored_restaurants = []
         for restaurant in restaurant_list:
             score = 0
             restaurant_text = f"{restaurant.get('vibe', '')} {restaurant.get('aim', '')} {restaurant.get('cuisine', '')}".lower()
             
-            # Аналізуємо відповідність
             for category, (user_keywords, restaurant_keywords) in keywords_map.items():
                 user_match = any(keyword in user_lower for keyword in user_keywords)
                 if user_match:
@@ -666,22 +460,17 @@ class RestaurantBot:
                     if restaurant_match:
                         score += 5
                     
-            # Додаємо випадковий бонус для різноманітності
             score += random.uniform(0, 2)
-            
             scored_restaurants.append((score, restaurant))
         
-        # Сортуємо, але беремо з ТОП-3 випадково
         scored_restaurants.sort(key=lambda x: x[0], reverse=True)
         
         if scored_restaurants[0][0] > 0:
-            # Якщо є хороші варіанти, беремо один з топ-3 випадково
             top_candidates = scored_restaurants[:min(3, len(scored_restaurants))]
             chosen = random.choice(top_candidates)[1]
             logger.info(f"🎯 Резервний алгоритм обрав: {chosen.get('name', '')} (випадково з ТОП-3)")
             return chosen
         else:
-            # Якщо немає явних збігів, беремо випадковий
             chosen = random.choice(restaurant_list)
             logger.info(f"🎲 Резервний алгоритм: випадковий вибір - {chosen.get('name', '')}")
             return chosen
@@ -704,7 +493,6 @@ class RestaurantBot:
             
         chosen = self._smart_fallback_selection(user_request, self.restaurants_data)
         
-        # Перетворюємо Google Drive посилання на фото
         photo_url = chosen.get('photo', '')
         if photo_url:
             photo_url = self._convert_google_drive_url(photo_url)
@@ -720,6 +508,83 @@ class RestaurantBot:
             "menu_url": chosen.get('menu_url', ''),
             "photo": photo_url
         }
+
+    async def log_request(self, user_id: int, user_request: str, restaurant_name: str, rating: Optional[int] = None, explanation: str = ""):
+        """Логування запиту до аналітичної таблиці"""
+        if not self.analytics_sheet:
+            logger.warning("Analytics sheet не доступний")
+            return
+            
+        try:
+            now = datetime.now()
+            timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+            date = now.strftime("%Y-%m-%d")
+            time = now.strftime("%H:%M:%S")
+            
+            row_data = [
+                timestamp,
+                str(user_id),
+                user_request,
+                restaurant_name,
+                str(rating) if rating else "",
+                explanation,
+                date,
+                time
+            ]
+            
+            self.analytics_sheet.append_row(row_data)
+            logger.info(f"📊 Записано до Analytics: {user_id} - {restaurant_name} - Оцінка: {rating} - Пояснення: {explanation[:50]}...")
+            
+            await self.update_summary_stats()
+            
+        except Exception as e:
+            logger.error(f"Помилка логування: {e}")
+    
+    async def update_summary_stats(self):
+        """Оновлення зведеної статистики"""
+        if not self.analytics_sheet or not self.summary_sheet:
+            return
+            
+        try:
+            all_records = self.analytics_sheet.get_all_records()
+            
+            if not all_records:
+                return
+            
+            total_requests = len(all_records)
+            unique_users = len(set(record['User ID'] for record in all_records))
+            
+            ratings = [int(record['Rating']) for record in all_records if record['Rating'] and str(record['Rating']).isdigit()]
+            avg_rating = sum(ratings) / len(ratings) if ratings else 0
+            rating_count = len(ratings)
+            
+            avg_requests_per_user = total_requests / unique_users if unique_users > 0 else 0
+            
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            self.summary_sheet.update('B2', str(total_requests))
+            self.summary_sheet.update('C2', timestamp)
+            
+            self.summary_sheet.update('B3', str(unique_users))
+            self.summary_sheet.update('C3', timestamp)
+            
+            self.summary_sheet.update('B4', f"{avg_rating:.2f}")
+            self.summary_sheet.update('C4', timestamp)
+            
+            self.summary_sheet.update('B5', str(rating_count))
+            self.summary_sheet.update('C5', timestamp)
+            
+            try:
+                self.summary_sheet.update('A6', "Середня кількість запитів на користувача")
+                self.summary_sheet.update('B6', f"{avg_requests_per_user:.2f}")
+                self.summary_sheet.update('C6', timestamp)
+            except:
+                self.summary_sheet.append_row(["Середня кількість запитів на користувача", f"{avg_requests_per_user:.2f}", timestamp])
+            
+            logger.info(f"📈 Оновлено статистику: Запитів: {total_requests}, Користувачів: {unique_users}, Середня оцінка: {avg_rating:.2f}")
+            
+        except Exception as e:
+            logger.error(f"Помилка оновлення статистики: {e}")
 
 restaurant_bot = RestaurantBot()
 
@@ -744,23 +609,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробник текстових повідомлень"""
     user_id = update.effective_user.id
     
-    # Якщо користувач не використав /start, пропонуємо це зробити
     if user_id not in user_states:
         await update.message.reply_text("Напишіть /start, щоб почати")
         return
     
     user_text = update.message.text
-    
-    # Перевіряємо стан користувача
     current_state = user_states[user_id]
     
-    # Обробляємо пояснення оцінки
     if current_state == "waiting_explanation":
         explanation = user_text
         rating_data = user_rating_data.get(user_id, {})
         
         if rating_data:
-            # Логуємо повний запис з поясненням
             await restaurant_bot.log_request(
                 user_id, 
                 rating_data['user_request'], 
@@ -769,7 +629,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 explanation
             )
             
-            # Відповідаємо користувачу
             await update.message.reply_text(
                 f"Дякую за детальну оцінку! 🙏\n\n"
                 f"Ваша оцінка: {rating_data['rating']}/10\n"
@@ -777,7 +636,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Напишіть /start, щоб знайти ще один ресторан!"
             )
             
-            # Очищуємо стан користувача
             user_states[user_id] = "completed"
             if user_id in user_last_recommendation:
                 del user_last_recommendation[user_id]
@@ -787,22 +645,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"💬 Користувач {user_id} надав пояснення оцінки: {explanation[:100]}...")
             return
     
-    # Перевіряємо чи це оцінка (число від 1 до 10)
     if current_state == "waiting_rating" and user_text.isdigit():
         rating = int(user_text)
         if 1 <= rating <= 10:
-            # Зберігаємо дані для пояснення
             restaurant_name = user_last_recommendation.get(user_id, "Невідомий ресторан")
             user_rating_data[user_id] = {
                 'rating': rating,
                 'restaurant_name': restaurant_name,
-                'user_request': 'Оцінка'  # Можна зберігати оригінальний запит якщо потрібно
+                'user_request': 'Оцінка'
             }
             
-            # Переводимо користувача в стан очікування пояснення
             user_states[user_id] = "waiting_explanation"
             
-            # НОВА ФУНКЦІЯ: Запитуємо пояснення оцінки
             await update.message.reply_text(
                 f"Дякую за оцінку {rating}/10! ⭐\n\n"
                 f"🤔 <b>Чи можеш пояснити чому така оцінка?</b>\n"
@@ -816,18 +670,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Будь ласка, напишіть число від 1 до 10")
             return
     
-    # Обробляємо звичайний запит ресторану
     if current_state == "waiting_request":
         user_request = user_text
         logger.info(f"🔍 Користувач {user_id} написав: {user_request}")
         
-        # Показуємо, що шукаємо
         processing_message = await update.message.reply_text("🔍 Шукаю ідеальний ресторан для вас...")
         
-        # Отримуємо рекомендацію
         recommendation = await restaurant_bot.get_recommendation(user_request)
         
-        # Видаляємо повідомлення "шукаю"
         try:
             await processing_message.delete()
         except:
@@ -836,14 +686,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if recommendation:
             restaurant_name = recommendation['name']
             
-            # Логуємо запит до бази даних (без оцінки поки що)
             await restaurant_bot.log_request(user_id, user_request, restaurant_name)
             
-            # Зберігаємо інформацію для майбутньої оцінки
             user_last_recommendation[user_id] = restaurant_name
             user_states[user_id] = "waiting_rating"
             
-            # Готуємо основну інформацію
             response_text = f"""🏠 <b>{recommendation['name']}</b>
 
 📍 <b>Адреса:</b> {recommendation['address']}
@@ -852,16 +699,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ✨ <b>Атмосфера:</b> {recommendation['vibe']}"""
 
-            # Додаємо ТІЛЬКИ посилання на меню (без тексту меню)
             menu_url = recommendation.get('menu_url', '')
             if menu_url and menu_url.startswith('http'):
                 response_text += f"\n\n📋 <a href='{menu_url}'>Переглянути меню</a>"
 
-            # Перевіряємо чи є фото
             photo_url = recommendation.get('photo', '')
             
             if photo_url and photo_url.startswith('http'):
-                # Надсилаємо фото як медіафайл з підписом
                 try:
                     logger.info(f"📸 Спроба надіслати фото: {photo_url}")
                     await update.message.reply_photo(
@@ -872,17 +716,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.info(f"✅ Надіслано рекомендацію з фото: {recommendation['name']}")
                 except Exception as photo_error:
                     logger.warning(f"⚠️ Не вдалося надіслати фото: {photo_error}")
-                    logger.warning(f"📸 Посилання на фото: {photo_url}")
-                    # Якщо фото не завантажується, надсилаємо текст без фото
                     response_text += f"\n\n📸 <a href='{photo_url}'>Переглянути фото ресторану</a>"
                     await update.message.reply_text(response_text, parse_mode='HTML')
                     logger.info(f"✅ Надіслано рекомендацію з посиланням на фото: {recommendation['name']}")
             else:
-                # Надсилаємо тільки текст якщо фото немає
                 await update.message.reply_text(response_text, parse_mode='HTML')
                 logger.info(f"✅ Надіслано текстову рекомендацію: {recommendation['name']}")
             
-            # Просимо оцінити
             rating_text = (
                 "⭐ <b>Оціни відповідність закладу від 1 до 10</b>\n"
                 "(напиши цифру в чаті)\n\n"
@@ -896,21 +736,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"⚠️ Не знайдено рекомендацій для користувача {user_id}")
     
     else:
-        # Якщо користувач написав щось інше в неправильному стані
         if current_state == "waiting_rating":
             await update.message.reply_text("Будь ласка, оцініть попередню рекомендацію числом від 1 до 10")
         elif current_state == "waiting_explanation":
-            # Це вже оброблено вище
             pass
         else:
             await update.message.reply_text("Напишіть /start, щоб почати знову")
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда для перегляду статистики (тільки для адміністраторів)"""
+    """Команда для перегляду статистики"""
     user_id = update.effective_user.id
     
-    # Список адміністраторів (додайте свій user_id)
-    admin_ids = [980047923]  # Замініть на свій Telegram user_id
+    admin_ids = [980047923]
     
     if user_id not in admin_ids:
         await update.message.reply_text("У вас немає доступу до статистики")
@@ -921,14 +758,12 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Статистика недоступна")
             return
         
-        # Отримуємо дані зі Summary листа
         summary_data = restaurant_bot.summary_sheet.get_all_values()
         
         if len(summary_data) < 6:
             await update.message.reply_text("Недостатньо даних для статистики")
             return
         
-        # Формуємо повідомлення зі статистикою
         stats_text = f"""📊 <b>Статистика бота</b>
 
 📈 Загальна кількість запитів: <b>{summary_data[1][1]}</b>
@@ -966,7 +801,6 @@ def main():
     logger.info("🚀 Запускаю оновлений бота...")
     
     try:
-        # Створюємо новий event loop для кожного запуску
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
@@ -983,7 +817,6 @@ def main():
         
         logger.info("✅ Всі сервіси підключено! Бот готовий до роботи!")
         
-        # Запускаємо polling
         loop.run_until_complete(application.run_polling(drop_pending_updates=True))
         
     except KeyboardInterrupt:
