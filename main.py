@@ -196,6 +196,172 @@ class RestaurantBot:
             logger.error(f"❌ Помилка тесту запису: {e}")
             return False
 
+    def _filter_by_establishment_type(self, user_request: str, restaurant_list):
+        """Фільтрує ресторани за типом закладу"""
+        user_lower = user_request.lower()
+        logger.info(f"🏢 Аналізую запит на тип закладу: '{user_request}'")
+        
+        # Визначаємо тип закладу з запиту користувача
+        type_keywords = {
+            'ресторан': {
+                'user_keywords': ['ресторан', 'обід', 'вечеря', 'побачення', 'романтик', 'святкув', 'банкет', 'посидіти', 'поїсти'],
+                'establishment_types': ['ресторан']
+            },
+            'кав\'ярня': {
+                'user_keywords': ['кава', 'капучіно', 'латте', 'еспресо', 'кав\'ярн', 'десерт', 'тирамісу', 'круасан', 'випити кави', 'кофе'],
+                'establishment_types': ['кав\'ярня', 'кафе']
+            },
+            'to-go': {
+                'user_keywords': ['швидко', 'на винос', 'перекус', 'поспішаю', 'to-go', 'takeaway', 'на швидку руку', 'перехопити'],
+                'establishment_types': ['to-go', 'takeaway']
+            },
+            'доставка': {
+                'user_keywords': ['доставка', 'додому', 'замовити', 'привезти', 'delivery', 'не хочу йти'],
+                'establishment_types': ['доставка', 'delivery']
+            }
+        }
+        
+        # Знаходимо відповідний тип закладу
+        detected_types = []
+        for establishment_type, keywords in type_keywords.items():
+            user_match = any(keyword in user_lower for keyword in keywords['user_keywords'])
+            if user_match:
+                detected_types.extend(keywords['establishment_types'])
+        
+        # Якщо тип не визначено, не фільтруємо
+        if not detected_types:
+            logger.info("🏢 Тип закладу не визначено, повертаю всі заклади")
+            return restaurant_list
+        
+        logger.info(f"🏢 Виявлено типи закладів: {detected_types}")
+        
+        # Фільтруємо за типом закладу
+        filtered_restaurants = []
+        for restaurant in restaurant_list:
+            establishment_type = restaurant.get('тип закладу', restaurant.get('type', '')).lower()
+            
+            # Перевіряємо чи збігається тип закладу
+            type_match = any(detected_type.lower() in establishment_type or establishment_type in detected_type.lower() 
+                           for detected_type in detected_types)
+            
+            if type_match:
+                filtered_restaurants.append(restaurant)
+                logger.info(f"   ✅ {restaurant.get('name', '')}: тип '{establishment_type}' підходить")
+            else:
+                logger.info(f"   ❌ {restaurant.get('name', '')}: тип '{establishment_type}' не підходить")
+        
+        if filtered_restaurants:
+            logger.info(f"🏢 Відфільтровано {len(filtered_restaurants)} закладів відповідного типу з {len(restaurant_list)}")
+            return filtered_restaurants
+        else:
+            logger.warning("⚠️ Жоден заклад не підходить за типом, повертаю всі")
+            return restaurant_list
+
+    def _filter_by_vibe(self, user_request: str, restaurant_list):
+        """Фільтрує ресторани за атмосферою (vibe)"""
+        user_lower = user_request.lower()
+        logger.info(f"✨ Аналізую запит на атмосферу: '{user_request}'")
+        
+        # Ключові слова для атмосфери
+        vibe_keywords = {
+            'романтичн': ['романт', 'побачен', 'інтимн', 'затишн', 'свічки', 'романс', 'двох'],
+            'веsel': ['весел', 'живо', 'енергійн', 'гучн', 'драйв', 'динамічн'],
+            'спокійн': ['спокійн', 'тих', 'релакс', 'умиротворен'],
+            'елегантн': ['елегантн', 'розкішн', 'стильн', 'преміум', 'вишукан'],
+            'casual': ['casual', 'невимушен', 'простий', 'домашн'],
+            'затишн': ['затишн', 'домашн', 'теплий', 'комфортн']
+        }
+        
+        # Знаходимо відповідну атмосферу
+        detected_vibes = []
+        for vibe_type, keywords in vibe_keywords.items():
+            user_match = any(keyword in user_lower for keyword in keywords)
+            if user_match:
+                detected_vibes.append(vibe_type)
+        
+        if not detected_vibes:
+            logger.info("✨ Атмосфера не визначена, повертаю всі заклади")
+            return restaurant_list
+        
+        logger.info(f"✨ Виявлено атмосферу: {detected_vibes}")
+        
+        # Фільтруємо за атмосферою
+        filtered_restaurants = []
+        for restaurant in restaurant_list:
+            restaurant_vibe = restaurant.get('vibe', '').lower()
+            
+            # Перевіряємо збіг атмосфери
+            vibe_match = any(
+                any(keyword in restaurant_vibe for keyword in vibe_keywords[detected_vibe])
+                for detected_vibe in detected_vibes
+            )
+            
+            if vibe_match:
+                filtered_restaurants.append(restaurant)
+                logger.info(f"   ✅ {restaurant.get('name', '')}: атмосфера '{restaurant_vibe}' підходить")
+            else:
+                logger.info(f"   ❌ {restaurant.get('name', '')}: атмосфера '{restaurant_vibe}' не підходить")
+        
+        if filtered_restaurants:
+            logger.info(f"✨ Відфільтровано {len(filtered_restaurants)} закладів відповідної атмосфери з {len(restaurant_list)}")
+            return filtered_restaurants
+        else:
+            logger.warning("⚠️ Жоден заклад не підходить за атмосферою, повертаю всі")
+            return restaurant_list
+
+    def _filter_by_aim(self, user_request: str, restaurant_list):
+        """Фільтрує ресторани за призначенням (aim)"""
+        user_lower = user_request.lower()
+        logger.info(f"🎯 Аналізую запит на призначення: '{user_request}'")
+        
+        # Ключові слова для призначення
+        aim_keywords = {
+            'сімейн': ['сім', 'діт', 'родин', 'батьк', 'мам', 'дитин', 'всією родиною'],
+            'діл': ['діл', 'зустріч', 'перегов', 'бізнес', 'робоч', 'офіс', 'партнер'],
+            'друз': ['друз', 'компан', 'гуртом', 'тусовк', 'молодіжн'],
+            'пар': ['пар', 'двох', 'побачен', 'романт', 'коханої', 'коханого'],
+            'святков': ['святкув', 'день народж', 'ювіле', 'свято', 'торжеств', 'банкет'],
+            'самот': ['сам', 'одн', 'поодин', 'без компанії'],
+            'груп': ['груп', 'багат', 'велик компан', 'корпоратив']
+        }
+        
+        # Знаходимо відповідне призначення
+        detected_aims = []
+        for aim_type, keywords in aim_keywords.items():
+            user_match = any(keyword in user_lower for keyword in keywords)
+            if user_match:
+                detected_aims.append(aim_type)
+        
+        if not detected_aims:
+            logger.info("🎯 Призначення не визначено, повертаю всі заклади")
+            return restaurant_list
+        
+        logger.info(f"🎯 Виявлено призначення: {detected_aims}")
+        
+        # Фільтруємо за призначенням
+        filtered_restaurants = []
+        for restaurant in restaurant_list:
+            restaurant_aim = restaurant.get('aim', '').lower()
+            
+            # Перевіряємо збіг призначення
+            aim_match = any(
+                any(keyword in restaurant_aim for keyword in aim_keywords[detected_aim])
+                for detected_aim in detected_aims
+            )
+            
+            if aim_match:
+                filtered_restaurants.append(restaurant)
+                logger.info(f"   ✅ {restaurant.get('name', '')}: призначення '{restaurant_aim}' підходить")
+            else:
+                logger.info(f"   ❌ {restaurant.get('name', '')}: призначення '{restaurant_aim}' не підходить")
+        
+        if filtered_restaurants:
+            logger.info(f"🎯 Відфільтровано {len(filtered_restaurants)} закладів відповідного призначення з {len(restaurant_list)}")
+            return filtered_restaurants
+        else:
+            logger.warning("⚠️ Жоден заклад не підходить за призначенням, повертаю всі")
+            return restaurant_list
+
     def _filter_by_context(self, user_request: str, restaurant_list):
         """Фільтрує ресторани за контекстом запиту"""
         user_lower = user_request.lower()
@@ -323,7 +489,7 @@ class RestaurantBot:
             return restaurant_list
 
     async def get_recommendation(self, user_request: str) -> Optional[Dict]:
-        """Отримання рекомендації через OpenAI з урахуванням меню та контексту"""
+        """Отримання рекомендації через OpenAI з урахуванням типу закладу, контексту та меню"""
         try:
             global openai_client
             if openai_client is None:
@@ -342,37 +508,85 @@ class RestaurantBot:
             
             logger.info(f"🎲 Перемішав порядок ресторанів для різноманітності")
             
-            context_filtered = self._filter_by_context(user_request, shuffled_restaurants)
+            # ТРЬОХЕТАПНА ФІЛЬТРАЦІЯ для максимальної точності:
+            
+            # 1. Спочатку фільтруємо за ТИПОМ ЗАКЛАДУ (ресторан/кав'ярня/доставка/to-go)
+            type_filtered = self._filter_by_establishment_type(user_request, shuffled_restaurants)
+            
+            # 2. Потім фільтруємо за КОНТЕКСТОМ (романтика/сім'я/друзі тощо)
+            context_filtered = self._filter_by_context(user_request, type_filtered)
+            
+            # 3. Нарешті фільтруємо по МЕНЮ (якщо шукають конкретну страву)
             final_filtered = self._filter_by_menu(user_request, context_filtered)
             
             restaurants_details = []
             for i, r in enumerate(final_filtered):
+                establishment_type = r.get('тип закладу', r.get('type', 'Не вказано'))
                 detail = f"""Варіант {i+1}:
 - Назва: {r.get('name', 'Без назви')}
-- Кухня: {r.get('cuisine', 'Не вказана')}
+- Тип: {establishment_type}
 - Атмосфера: {r.get('vibe', 'Не описана')}
-- Підходить для: {r.get('aim', 'Не вказано')}"""
+- Призначення: {r.get('aim', 'Не вказано')}
+- Кухня: {r.get('cuisine', 'Не вказана')}"""
                 restaurants_details.append(detail)
             
             restaurants_text = "\n\n".join(restaurants_details)
             
             prompt = f"""ЗАПИТ КОРИСТУВАЧА: "{user_request}"
 
-ВАЖЛИВО: Всі заклади нижче УЖЕ ВІДФІЛЬТРОВАНІ і підходять під запит користувача.
+ВАЖЛИВО: Всі заклади нижче пройшли ЧОТИРЬОХЕТАПНУ ФІЛЬТРАЦІЮ і максимально підходять під запит.
 
-ВАРІАНТИ ЗАКЛАДІВ:
 {restaurants_text}
 
-ІНСТРУКЦІЇ:
-- Обери ТІЛЬКИ номер варіанту (число від 1 до {len(final_filtered)})
-- НЕ пояснюй свій вибір
-- НЕ додавай коментарі про кухню чи атмосферу
-- Просто поверни номер: наприклад "3"
+ЗАВДАННЯ:
+1. Обери 2 НАЙКРАЩІ варіанти (якщо є тільки 1 варіант, то тільки його)
+2. Вкажи який з них є ПРІОРИТЕТНИМ і коротко поясни ЧОМУ
 
-Номер обраного варіанту:"""
+ФОРМАТ ВІДПОВІДІ:
+Варіанти: [номер1, номер2]
+Пріоритет: [номер] - [коротке пояснення причини]
 
-            logger.info(f"🤖 Надсилаю запит до OpenAI з {len(final_filtered)} ВІДФІЛЬТРОВАНИМИ варіантами...")
-            logger.info(f"🔍 Топ-3 відфільтровані варіанти: {[r.get('name') for r in final_filtered[:3]]}")
+ПРИКЛАД:
+Варіанти: [1, 3]
+Пріоритет: 1 - ідеально підходить за атмосферою та розташуванням
+
+ТВОЯ ВІДПОВІДЬ:"""
+
+            logger.info(f"🤖 Запитую у OpenAI 2 найкращі варіанти з {len(final_filtered)} відфільтрованих...")
+            
+            # Показуємо деталі всіх варіантів для діагностики
+            for i, r in enumerate(final_filtered):
+                logger.info(f"   {i+1}. {r.get('name', '')} ({r.get('тип закладу', r.get('type', ''))} | {r.get('vibe', '')} | {r.get('aim', '')})")
+
+            def make_openai_request():
+                return openai_client.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "Ти експерт-ресторатор. Аналізуй варіанти та обирай найкращі з обґрунтуванням."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=200,
+                    temperature=0.3,
+                    top_p=0.9
+                )
+            
+            response = await asyncio.wait_for(
+                asyncio.to_thread(make_openai_request),
+                timeout=20
+            )
+            
+            choice_text = response.choices[0].message.content.strip()
+            logger.info(f"🤖 OpenAI повна відповідь: '{choice_text}'")
+            
+            # Парсимо відповідь OpenAI
+            recommendations = self._parse_dual_recommendation(choice_text, final_filtered)
+            
+            if recommendations:
+                return recommendations
+            else:
+                logger.warning("⚠️ Не вдалось розпарсити відповідь OpenAI, використовую резервний алгоритм")
+                # Резервний варіант - беремо 2 найкращі за резервним алгоритмом
+                return self._fallback_dual_selection(user_request, final_filtered)
             
             def make_openai_request():
                 return openai_client.ChatCompletion.create(
@@ -409,29 +623,190 @@ class RestaurantBot:
             else:
                 logger.warning("⚠️ Не знайдено чисел в відповіді, використовую резервний алгоритм")
                 chosen_restaurant = self._smart_fallback_selection(user_request, final_filtered)
+        except asyncio.TimeoutError:
+            logger.error("⏰ Timeout при запиті до OpenAI, використовую резервний алгоритм")
+            return self._fallback_dual_selection(user_request, self.restaurants_data)
+        except Exception as e:
+            logger.error(f"❌ Помилка отримання рекомендації: {e}")
+            return self._fallback_dual_selection(user_request, self.restaurants_data)
+
+    def _parse_dual_recommendation(self, openai_response: str, filtered_restaurants):
+        """Парсить відповідь OpenAI з двома рекомендаціями"""
+        try:
+            lines = openai_response.strip().split('\n')
+            variants_line = ""
+            priority_line = ""
             
-            photo_url = chosen_restaurant.get('photo', '')
+            for line in lines:
+                line = line.strip()
+                if line.lower().startswith('варіант') and '[' in line:
+                    variants_line = line
+                elif line.lower().startswith('пріоритет') and '-' in line:
+                    priority_line = line
+            
+            logger.info(f"🔍 Парсинг - Варіанти: '{variants_line}', Пріоритет: '{priority_line}'")
+            
+            # Витягуємо номери варіантів
+            import re
+            numbers = re.findall(r'\d+', variants_line)
+            
+            if len(numbers) >= 1:
+                # Конвертуємо в індекси (мінус 1)
+                indices = [int(num) - 1 for num in numbers[:2]]  # Беремо максимум 2
+                
+                # Перевіряємо що індекси в межах
+                valid_indices = [idx for idx in indices if 0 <= idx < len(filtered_restaurants)]
+                
+                if not valid_indices:
+                    logger.warning("⚠️ Всі індекси поза межами")
+                    return None
+                
+                restaurants = [filtered_restaurants[idx] for idx in valid_indices]
+                
+                # Визначаємо пріоритетний ресторан
+                priority_num = None
+                priority_explanation = "найкращий варіант за всіма критеріями"
+                
+                if priority_line and '-' in priority_line:
+                    # Шукаємо номер пріоритету
+                    priority_match = re.search(r'(\d+)', priority_line.split('-')[0])
+                    if priority_match:
+                        priority_num = int(priority_match.group(1))
+                    
+                    # Витягуємо пояснення
+                    explanation_part = priority_line.split('-', 1)[1].strip()
+                    if explanation_part:
+                        priority_explanation = explanation_part
+                
+                # Визначаємо який ресторан пріоритетний
+                if priority_num and (priority_num - 1) in valid_indices:
+                    priority_index = valid_indices.index(priority_num - 1)
+                else:
+                    priority_index = 0  # За замовчуванням перший
+                
+                logger.info(f"✅ Розпарсено: {len(restaurants)} ресторанів, пріоритет: {priority_index + 1}")
+                
+                # Повертаємо структуру з двома рекомендаціями
+                result = {
+                    "restaurants": [],
+                    "priority_index": priority_index,
+                    "priority_explanation": priority_explanation
+                }
+                
+                for restaurant in restaurants:
+                    photo_url = restaurant.get('photo', '')
+                    if photo_url:
+                        photo_url = self._convert_google_drive_url(photo_url)
+                    
+                    result["restaurants"].append({
+                        "name": restaurant.get('name', 'Ресторан'),
+                        "address": restaurant.get('address', 'Адреса не вказана'),
+                        "socials": restaurant.get('socials', 'Соц-мережі не вказані'),
+                        "vibe": restaurant.get('vibe', 'Приємна атмосфера'),
+                        "aim": restaurant.get('aim', 'Для будь-яких подій'),
+                        "cuisine": restaurant.get('cuisine', 'Смачна кухня'),
+                        "menu": restaurant.get('menu', ''),
+                        "menu_url": restaurant.get('menu_url', ''),
+                        "photo": photo_url,
+                        "type": restaurant.get('тип закладу', restaurant.get('type', 'Заклад'))
+                    })
+                
+                return result
+            
+            logger.warning("⚠️ Не знайдено номерів у відповіді OpenAI")
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Помилка парсингу відповіді OpenAI: {e}")
+            return None
+
+    def _fallback_dual_selection(self, user_request: str, restaurant_list):
+        """Резервний алгоритм для двох рекомендацій"""
+        if not restaurant_list:
+            return None
+        
+        import random
+        
+        # Якщо тільки один ресторан
+        if len(restaurant_list) == 1:
+            chosen = restaurant_list[0]
+            photo_url = chosen.get('photo', '')
+            if photo_url:
+                photo_url = self._convert_google_drive_url(photo_url)
+                
+            return {
+                "restaurants": [{
+                    "name": chosen.get('name', 'Ресторан'),
+                    "address": chosen.get('address', 'Адреса не вказана'),
+                    "socials": chosen.get('socials', 'Соц-мережі не вказані'),
+                    "vibe": chosen.get('vibe', 'Приємна атмосфера'),
+                    "aim": chosen.get('aim', 'Для будь-яких подій'),
+                    "cuisine": chosen.get('cuisine', 'Смачна кухня'),
+                    "menu": chosen.get('menu', ''),
+                    "menu_url": chosen.get('menu_url', ''),
+                    "photo": photo_url,
+                    "type": chosen.get('тип закладу', chosen.get('type', 'Заклад'))
+                }],
+                "priority_index": 0,
+                "priority_explanation": "єдиний доступний варіант після фільтрації"
+            }
+        
+        # Використовуємо розумний алгоритм для вибору 2 найкращих
+        scored_restaurants = []
+        user_lower = user_request.lower()
+        
+        keywords_map = {
+            'romantic': (['романт', 'побачен', 'інтимн'], ['інтимн', 'романт', 'пар']),
+            'family': (['сім', 'діт', 'родин'], ['сімейн', 'діт', 'родин']),
+            'business': (['діл', 'зустріч', 'бізнес'], ['діл', 'бізнес']),
+            'friends': (['друз', 'компан', 'весел'], ['компан', 'друз', 'молодіжн'])
+        }
+        
+        for restaurant in restaurant_list:
+            score = 0
+            restaurant_text = f"{restaurant.get('vibe', '')} {restaurant.get('aim', '')}".lower()
+            
+            for category, (user_keywords, restaurant_keywords) in keywords_map.items():
+                user_match = any(keyword in user_lower for keyword in user_keywords)
+                if user_match:
+                    restaurant_match = any(keyword in restaurant_text for keyword in restaurant_keywords)
+                    if restaurant_match:
+                        score += 3
+            
+            score += random.uniform(0, 1)  # Невеликий випадковий бонус
+            scored_restaurants.append((score, restaurant))
+        
+        # Сортуємо та беремо топ-2
+        scored_restaurants.sort(key=lambda x: x[0], reverse=True)
+        top_restaurants = [item[1] for item in scored_restaurants[:2]]
+        
+        # Формуємо результат
+        result = {
+            "restaurants": [],
+            "priority_index": 0,
+            "priority_explanation": "найвищий рейтинг за алгоритмом відповідності"
+        }
+        
+        for restaurant in top_restaurants:
+            photo_url = restaurant.get('photo', '')
             if photo_url:
                 photo_url = self._convert_google_drive_url(photo_url)
             
-            return {
-                "name": chosen_restaurant.get('name', 'Ресторан'),
-                "address": chosen_restaurant.get('address', 'Адреса не вказана'),
-                "socials": chosen_restaurant.get('socials', 'Соц-мережі не вказані'),
-                "vibe": chosen_restaurant.get('vibe', 'Приємна атмосфера'),
-                "aim": chosen_restaurant.get('aim', 'Для будь-яких подій'),
-                "cuisine": chosen_restaurant.get('cuisine', 'Смачна кухня'),
-                "menu": chosen_restaurant.get('menu', ''),
-                "menu_url": chosen_restaurant.get('menu_url', ''),
-                "photo": photo_url
-            }
-            
-        except asyncio.TimeoutError:
-            logger.error("⏰ Timeout при запиті до OpenAI, використовую резервний алгоритм")
-            return self._fallback_selection_dict(user_request)
-        except Exception as e:
-            logger.error(f"❌ Помилка отримання рекомендації: {e}")
-            return self._fallback_selection_dict(user_request)
+            result["restaurants"].append({
+                "name": restaurant.get('name', 'Ресторан'),
+                "address": restaurant.get('address', 'Адреса не вказана'),
+                "socials": restaurant.get('socials', 'Соц-мережі не вказані'),
+                "vibe": restaurant.get('vibe', 'Приємна атмосфера'),
+                "aim": restaurant.get('aim', 'Для будь-яких подій'),
+                "cuisine": restaurant.get('cuisine', 'Смачна кухня'),
+                "menu": restaurant.get('menu', ''),
+                "menu_url": restaurant.get('menu_url', ''),
+                "photo": photo_url,
+                "type": restaurant.get('тип закладу', restaurant.get('type', 'Заклад'))
+            })
+        
+        logger.info(f"🎯 Резервний алгоритм: обрано {len(result['restaurants'])} ресторанів")
+        return result
 
     def _smart_fallback_selection(self, user_request: str, restaurant_list):
         """Резервний алгоритм з рандомізацією"""
@@ -684,51 +1059,91 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         
         if recommendation:
-            restaurant_name = recommendation['name']
+            # Тепер recommendation це словник з кількома ресторанами
+            restaurants = recommendation["restaurants"]
+            priority_index = recommendation["priority_index"]
+            priority_explanation = recommendation["priority_explanation"]
             
-            await restaurant_bot.log_request(user_id, user_request, restaurant_name)
+            # Логуємо основний (пріоритетний) ресторан
+            main_restaurant = restaurants[priority_index]
+            await restaurant_bot.log_request(user_id, user_request, main_restaurant["name"])
             
-            user_last_recommendation[user_id] = restaurant_name
+            # Зберігаємо пріоритетний ресторан для оцінки
+            user_last_recommendation[user_id] = main_restaurant["name"]
             user_states[user_id] = "waiting_rating"
             
-            response_text = f"""🏠 <b>{recommendation['name']}</b>
+            # Формуємо повідомлення з двома варіантами
+            if len(restaurants) == 1:
+                # Якщо тільки один варіант
+                response_text = f"""🏠 <b>Рекомендую цей заклад:</b>
 
-📍 <b>Адреса:</b> {recommendation['address']}
+<b>{restaurants[0]['name']}</b>
+📍 {restaurants[0]['address']}
+🏢 Тип: {restaurants[0]['type']}
+📱 Соц-мережі: {restaurants[0]['socials']}
+✨ Атмосфера: {restaurants[0]['vibe']}
+🎯 Підходить для: {restaurants[0]['aim']}"""
+            else:
+                # Якщо два варіанти
+                priority_restaurant = restaurants[priority_index]
+                alternative_restaurant = restaurants[1 - priority_index]
+                
+                response_text = f"""🎯 <b>2 найкращі варіанти для вас:</b>
 
-📱 <b>Соц-мережі:</b> {recommendation['socials']}
+<b>🏆 ПРІОРИТЕТНА РЕКОМЕНДАЦІЯ:</b>
+<b>{priority_restaurant['name']}</b>
+📍 {priority_restaurant['address']}
+🏢 Тип: {priority_restaurant['type']}
+📱 Соц-мережі: {priority_restaurant['socials']}
+✨ Атмосфера: {priority_restaurant['vibe']}
+🎯 Підходить для: {priority_restaurant['aim']}
 
-✨ <b>Атмосфера:</b> {recommendation['vibe']}"""
+💡 <i>Чому пріоритет: {priority_explanation}</i>
 
-            menu_url = recommendation.get('menu_url', '')
-            if menu_url and menu_url.startswith('http'):
-                response_text += f"\n\n📋 <a href='{menu_url}'>Переглянути меню</a>"
+➖➖➖➖➖➖➖➖➖➖
 
-            photo_url = recommendation.get('photo', '')
+<b>🥈 АЛЬТЕРНАТИВНИЙ ВАРІАНТ:</b>
+<b>{alternative_restaurant['name']}</b>
+📍 {alternative_restaurant['address']}
+🏢 Тип: {alternative_restaurant['type']}
+📱 Соц-мережі: {alternative_restaurant['socials']}
+✨ Атмосфера: {alternative_restaurant['vibe']}
+🎯 Підходить для: {alternative_restaurant['aim']}"""
+
+            # Додаємо посилання на меню для пріоритетного ресторану
+            main_menu_url = main_restaurant.get('menu_url', '')
+            if main_menu_url and main_menu_url.startswith('http'):
+                response_text += f"\n\n📋 <a href='{main_menu_url}'>Переглянути меню пріоритетного варіанту</a>"
+
+            # Відправляємо фото пріоритетного ресторану (якщо є)
+            main_photo_url = main_restaurant.get('photo', '')
             
-            if photo_url and photo_url.startswith('http'):
+            if main_photo_url and main_photo_url.startswith('http'):
                 try:
-                    logger.info(f"📸 Спроба надіслати фото: {photo_url}")
+                    logger.info(f"📸 Надсилаю фото пріоритетного ресторану: {main_photo_url}")
                     await update.message.reply_photo(
-                        photo=photo_url,
+                        photo=main_photo_url,
                         caption=response_text,
                         parse_mode='HTML'
                     )
-                    logger.info(f"✅ Надіслано рекомендацію з фото: {recommendation['name']}")
+                    logger.info(f"✅ Надіслано рекомендації з фото: {main_restaurant['name']}")
                 except Exception as photo_error:
                     logger.warning(f"⚠️ Не вдалося надіслати фото: {photo_error}")
-                    response_text += f"\n\n📸 <a href='{photo_url}'>Переглянути фото ресторану</a>"
+                    response_text += f"\n\n📸 <a href='{main_photo_url}'>Переглянути фото пріоритетного ресторану</a>"
                     await update.message.reply_text(response_text, parse_mode='HTML')
-                    logger.info(f"✅ Надіслано рекомендацію з посиланням на фото: {recommendation['name']}")
+                    logger.info(f"✅ Надіслано рекомендації з посиланням на фото: {main_restaurant['name']}")
             else:
                 await update.message.reply_text(response_text, parse_mode='HTML')
-                logger.info(f"✅ Надіслано текстову рекомендацію: {recommendation['name']}")
+                logger.info(f"✅ Надіслано текстові рекомендації: {main_restaurant['name']}")
             
-            rating_text = (
-                "⭐ <b>Оціни відповідність закладу від 1 до 10</b>\n"
-                "(напиши цифру в чаті)\n\n"
-                "1 - зовсім не підходить\n"
-                "10 - ідеально підходить"
-            )
+            # Просимо оцінити ПРІОРИТЕТНИЙ варіант
+            rating_text = f"""⭐ <b>Оціни ПРІОРИТЕТНУ рекомендацію від 1 до 10</b>
+(оцінюємо "{main_restaurant['name']}")
+
+1 - зовсім не підходить
+10 - ідеально підходить
+
+Напиши цифру в чаті 👇"""
             await update.message.reply_text(rating_text, parse_mode='HTML')
             
         else:
