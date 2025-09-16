@@ -343,6 +343,7 @@ class RestaurantBot:
                 "menu_url": chosen_restaurant.get('menu_url', ''),
                 "photo": photo_url
             }
+            
         except asyncio.TimeoutError:
             logger.error("⏰ Timeout при запиті до OpenAI, використовую резервний алгоритм")
             return self._fallback_selection_dict(user_request)
@@ -462,25 +463,19 @@ class RestaurantBot:
         """Резервний алгоритм що повертає словник"""
         if not self.restaurants_data:
             logger.error("❌ Немає даних про ресторани для fallback")
-            return None  # Змінено: повертаємо None замість заглушки
+            return {
+                "name": "Ресторан недоступний",
+                "address": "Спробуйте пізніше",
+                "socials": "",
+                "vibe": "",
+                "aim": "",
+                "cuisine": "",
+                "menu": "",
+                "menu_url": "",
+                "photo": ""
+            }
             
-        # ВАЖЛИВО: перевіряємо чи це запит конкретної страви
-        filter_result = self._filter_by_menu(user_request, self.restaurants_data)
-        
-        if not filter_result["found_food"]:
-            logger.error("❌ FALLBACK: Страва не знайдена навіть в резервному алгоритмі!")
-            return None  # Повертаємо None, щоб показати повідомлення про відсутність страви
-        
-        filtered_restaurants = filter_result["restaurants"]
-        if not filtered_restaurants:
-            logger.error("❌ FALLBACK: Список відфільтрованих ресторанів порожній!")
-            return None
-            
-        chosen = self._smart_fallback_selection(user_request, filtered_restaurants)
-        
-        if chosen is None:
-            logger.error("❌ FALLBACK: Smart fallback також повернув None!")
-            return None
+        chosen = self._smart_fallback_selection(user_request, self.restaurants_data)
         
         # Перетворюємо Google Drive посилання на фото
         photo_url = chosen.get('photo', '')
@@ -632,20 +627,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(rating_text, parse_mode='HTML')
             
         else:
-            # Генеруємо персоналізоване повідомлення про відсутність страви
-            not_found_message = restaurant_bot._get_dish_not_found_message(user_request)
-            await update.message.reply_text(not_found_message)
-            
-            # Логуємо "невдалий" запит для статистики
-            await restaurant_bot.log_request(user_id, user_request, "Страва не знайдена")
-            
-            # Пропонуємо почати заново
-            await update.message.reply_text("Напишіть /start, щоб спробувати знайти щось інше!")
-            
-            # Очищуємо стан користувача
-            user_states[user_id] = "completed"
-            
-            logger.warning(f"⚠️ Не знайдено закладів з потрібною стравою для користувача {user_id}")
+            await update.message.reply_text("Вибачте, не знайшов закладів з потрібними стравами. Спробуйте змінити запит або вказати конкретну страву.")
+            logger.warning(f"⚠️ Не знайдено рекомендацій для користувача {user_id}")
     
     else:
         # Якщо користувач написав щось інше в неправильному стані
@@ -659,7 +642,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     # Список адміністраторів (додайте свій user_id)
-    admin_ids = [123456789]  # Замініть на свій Telegram user_id
+    admin_ids = [980047923]  # Замініть на свій Telegram user_id
     
     if user_id not in admin_ids:
         await update.message.reply_text("У вас немає доступу до статистики")
