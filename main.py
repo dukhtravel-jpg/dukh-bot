@@ -320,12 +320,95 @@ class RestaurantBot:
             
             logger.info(f"🎲 Перемішав порядок ресторанів для різноманітності")
             
-            # Фільтруємо по меню (якщо користувач шукає конкретну страву)
-            filtered_restaurants = self._filter_by_menu(user_request, shuffled_restaurants)
+    def _filter_by_menu(self, user_request: str, restaurant_list):
+        """Фільтрує ресторани по меню (якщо користувач шукає конкретну страву)"""
+        user_lower = user_request.lower()
+        
+        # Ключові слова для конкретних страв
+        food_keywords = {
+            'піца': [' піц', 'pizza', 'піца'],
+            'паста': [' паст', 'спагеті', 'pasta'],
+            'бургер': ['бургер', 'burger', 'гамбургер'],
+            'суші': [' суші', 'sushi', ' рол', 'ролл', 'сашімі'],
+            'салат': [' салат', 'salad'],
+            'хумус': ['хумус', 'hummus'],
+            'фалафель': ['фалафель', 'falafel'],
+            'шаурма': ['шаурм', 'shawarma'],
+            'стейк': ['стейк', 'steak', ' мясо'],
+            'риба': [' риб', 'fish', 'лосось'],
+            'курка': [' курк', 'курич', 'chicken'],
+            'десерт': ['десерт', 'торт', 'тірамісу', 'морозиво']
+        }
+        
+        # Перевіряємо чи користувач шукає конкретну страву
+        requested_dishes = []
+        for dish, keywords in food_keywords.items():
+            if any(keyword in user_lower for keyword in keywords):
+                requested_dishes.append(dish)
+        
+        if requested_dishes:
+            # Фільтруємо ресторани де є потрібні страви
+            filtered_restaurants = []
+            logger.info(f"🍽 Користувач шукає конкретні страви: {requested_dishes}")
+            
+            for restaurant in restaurant_list:
+                menu_text = restaurant.get('menu', '').lower()
+                has_requested_dish = False
+                
+                for dish in requested_dishes:
+                    dish_keywords = food_keywords[dish]
+                    if any(keyword in menu_text for keyword in dish_keywords):
+                        has_requested_dish = True
+                        logger.info(f"   ✅ {restaurant.get('name', '')} має {dish}")
+                        break
+                
+                if has_requested_dish:
+                    filtered_restaurants.append(restaurant)
+                else:
+                    logger.info(f"   ❌ {restaurant.get('name', '')} немає потрібних страв")
+            
+            if filtered_restaurants:
+                logger.info(f"📋 Відфільтровано до {len(filtered_restaurants)} закладів з потрібними стравами")
+                return filtered_restaurants
+            else:
+                logger.warning("⚠️ Жоден заклад не має потрібних страв, показую всі")
+                return restaurant_list
+        else:
+            # Якщо не шукає конкретну страву, повертаємо всі ресторани
+            logger.info("🔍 Загальний запит, аналізую всі ресторани")
+            return restaurant_list
+
+    async def get_recommendation(self, user_request: str) -> Optional[Dict]:
+        """Отримання рекомендації через OpenAI з урахуванням меню та контексту"""
+        try:
+            # Ініціалізуємо OpenAI клієнт
+            global openai_client
+            if openai_client is None:
+                import openai
+                openai.api_key = OPENAI_API_KEY
+                openai_client = openai
+                logger.info("✅ OpenAI клієнт ініціалізовано")
+            
+            if not self.restaurants_data:
+                logger.error("❌ Немає даних про ресторани")
+                return None
+            
+            # Рандомізуємо порядок ресторанів для різноманітності
+            import random
+            shuffled_restaurants = self.restaurants_data.copy()
+            random.shuffle(shuffled_restaurants)
+            
+            logger.info(f"🎲 Перемішав порядок ресторанів для різноманітності")
+            
+            # СПОЧАТКУ фільтруємо за контекстом (романтика, сім'я тощо)
+            context_filtered = self._filter_by_context(user_request, shuffled_restaurants)
+            
+            # ПОТІМ фільтруємо по меню (якщо користувач шукає конкретну страву)
+            final_filtered = self._filter_by_menu(user_request, context_filtered)
             
             # Готуємо детальний промпт для OpenAI
             restaurants_details = []
-            for i, r in enumerate(filtered_restaurants):
+            for i, r in enumerate(final_filtered):
                 detail = f"""Варіант {i+1}:
 - Назва: {r.get('name', 'Без назви')}
 - Кухня: {r.get('cuisine', 'Не вказана')}
@@ -335,17 +418,6 @@ class RestaurantBot:
             
             restaurants_text = "\n\n".join(restaurants_details)
             
-            # Додаємо випадкові приклади для різноманітності
-            examples = [
-                "Якщо запит про романтику → обирай інтимну атмосферу",
-                "Якщо згадані діти/сім'я → обирай сімейні заклади", 
-                "Якщо швидкий перекус → обирай casual формат",
-                "Якщо особлива кухня → враховуй тип кухні",
-                "Якщо святкування → обирай просторні заклади"
-            ]
-            random.shuffle(examples)
-            selected_examples = examples[:2]
-            
             prompt = f"""ЗАПИТ КОРИСТУВАЧА: "{user_request}"
 
 ВАЖЛИВО: Всі заклади нижче УЖЕ ВІДФІЛЬТРОВАНІ і підходять під запит користувача.
@@ -354,21 +426,21 @@ class RestaurantBot:
 {restaurants_text}
 
 ІНСТРУКЦІЇ:
-- Обери ТІЛЬКИ номер варіанту (число від 1 до {len(filtered_restaurants)})
+- Обери ТІЛЬКИ номер варіанту (число від 1 до {len(final_filtered)})
 - НЕ пояснюй свій вибір
 - НЕ додавай коментарі про кухню чи атмосферу
 - Просто поверни номер: наприклад "3"
 
 Номер обраного варіанту:"""
 
-            logger.info(f"🤖 Надсилаю запит до OpenAI з {len(filtered_restaurants)} варіантами...")
-            logger.info(f"🔍 Перші 3 варіанти: {[r.get('name') for r in filtered_restaurants[:3]]}")
+            logger.info(f"🤖 Надсилаю запит до OpenAI з {len(final_filtered)} ВІДФІЛЬТРОВАНИМИ варіантами...")
+            logger.info(f"🔍 Топ-3 відфільтровані варіанти: {[r.get('name') for r in final_filtered[:3]]}")
             
             def make_openai_request():
                 return openai_client.ChatCompletion.create(
                     model="gpt-3.5-turbo",
                     messages=[
-                        {"role": "system", "content": "Ти експерт-ресторатор. Обирай варіанти різноманітно, не зациклюй на одному закладі."},
+                        {"role": "system", "content": "Ти експерт-ресторатор. Обирай варіанти різноманітно з УЖЕ ВІДФІЛЬТРОВАНОГО списку."},
                         {"role": "user", "content": prompt}
                     ],
                     max_tokens=200,
@@ -392,15 +464,15 @@ class RestaurantBot:
                 choice_num = int(numbers[0]) - 1
                 logger.info(f"🔍 Знайдено число в відповіді: {numbers[0]} → індекс {choice_num}")
                 
-                if 0 <= choice_num < len(filtered_restaurants):
-                    chosen_restaurant = filtered_restaurants[choice_num]
-                    logger.info(f"✅ OpenAI обрав: {chosen_restaurant.get('name', '')} (варіант {choice_num + 1} з {len(filtered_restaurants)})")
+                if 0 <= choice_num < len(final_filtered):
+                    chosen_restaurant = final_filtered[choice_num]
+                    logger.info(f"✅ OpenAI обрав ВІДФІЛЬТРОВАНИЙ ресторан: {chosen_restaurant.get('name', '')} (варіант {choice_num + 1} з {len(final_filtered)})")
                 else:
                     logger.warning(f"⚠️ Число {choice_num + 1} поза межами, використовую резервний алгоритм")
-                    chosen_restaurant = self._smart_fallback_selection(user_request, filtered_restaurants)
+                    chosen_restaurant = self._smart_fallback_selection(user_request, final_filtered)
             else:
                 logger.warning("⚠️ Не знайдено чисел в відповіді, використовую резервний алгоритм")
-                chosen_restaurant = self._smart_fallback_selection(user_request, filtered_restaurants)
+                chosen_restaurant = self._smart_fallback_selection(user_request, final_filtered)
             
             # Перетворюємо Google Drive посилання на фото
             photo_url = chosen_restaurant.get('photo', '')
@@ -427,7 +499,86 @@ class RestaurantBot:
             logger.error(f"❌ Помилка отримання рекомендації: {e}")
             return self._fallback_selection_dict(user_request)
 
-    def _filter_by_menu(self, user_request: str, restaurant_list):
+    def _filter_by_context(self, user_request: str, restaurant_list):
+        """Фільтрує ресторани за контекстом запиту (романтика, сім'я, друзі тощо)"""
+        user_lower = user_request.lower()
+        logger.info(f"🎯 Аналізую запит на контекст: '{user_request}'")
+        
+        # Визначаємо категорії з ключовими словами
+        context_filters = {
+            'romantic': {
+                'user_keywords': ['романт', 'побачен', 'двох', 'інтимн', 'затишн', 'свічки', 'романс'],
+                'restaurant_keywords': ['романт', 'інтимн', 'затишн', 'для пар', 'камерн', 'приват']
+            },
+            'family': {
+                'user_keywords': ['сім', 'діт', 'родин', 'батьк', 'мам', 'дитин'],
+                'restaurant_keywords': ['сімейн', 'діт', 'родин', 'для всієї сім']
+            },
+            'business': {
+                'user_keywords': ['діл', 'зустріч', 'перегов', 'бізнес', 'робоч', 'офіс'],
+                'restaurant_keywords': ['діл', 'зустріч', 'бізнес', 'перегов', 'офіц']
+            },
+            'friends': {
+                'user_keywords': ['друз', 'компан', 'гуртом', 'весел', 'тусовк'],
+                'restaurant_keywords': ['компан', 'друз', 'молодіжн', 'весел', 'гучн']
+            },
+            'celebration': {
+                'user_keywords': ['святкув', 'день народж', 'ювіле', 'свято', 'торжеств'],
+                'restaurant_keywords': ['святков', 'просторн', 'банкет', 'торжеств', 'груп']
+            },
+            'quick': {
+                'user_keywords': ['швидк', 'перекус', 'фаст', 'поспіша', 'на швидку руку'],
+                'restaurant_keywords': ['швидк', 'casual', 'фаст', 'перекус']
+            }
+        }
+        
+        # Знаходимо відповідний контекст
+        detected_contexts = []
+        for context, keywords in context_filters.items():
+            user_match = any(keyword in user_lower for keyword in keywords['user_keywords'])
+            if user_match:
+                detected_contexts.append(context)
+        
+        if not detected_contexts:
+            logger.info("📝 Контекст не визначено, повертаю всі ресторани")
+            return restaurant_list
+        
+        logger.info(f"🎯 Виявлено контекст(и): {detected_contexts}")
+        
+        # Фільтруємо ресторани за контекстом
+        filtered_restaurants = []
+        for restaurant in restaurant_list:
+            # Об'єднуємо всі текстові поля ресторану для аналізу
+            restaurant_text = f"{restaurant.get('vibe', '')} {restaurant.get('aim', '')} {restaurant.get('cuisine', '')} {restaurant.get('name', '')}".lower()
+            
+            restaurant_score = 0
+            matched_contexts = []
+            
+            # Перевіряємо кожен виявлений контекст
+            for context in detected_contexts:
+                context_keywords = context_filters[context]['restaurant_keywords']
+                if any(keyword in restaurant_text for keyword in context_keywords):
+                    restaurant_score += 1
+                    matched_contexts.append(context)
+            
+            if restaurant_score > 0:
+                filtered_restaurants.append((restaurant_score, restaurant, matched_contexts))
+                logger.info(f"   ✅ {restaurant.get('name', '')}: збіг по {matched_contexts}")
+            else:
+                logger.info(f"   ❌ {restaurant.get('name', '')}: не підходить за контекстом")
+        
+        if filtered_restaurants:
+            # Сортуємо за релевантністю (кількість збігів)
+            filtered_restaurants.sort(key=lambda x: x[0], reverse=True)
+            
+            # Повертаємо тільки ресторани (без score)
+            result = [item[1] for item in filtered_restaurants]
+            
+            logger.info(f"🎯 Відфільтровано {len(result)} релевантних ресторанів з {len(restaurant_list)}")
+            return result
+        else:
+            logger.warning("⚠️ Жоден ресторан не підходить за контекстом, повертаю всі")
+            return restaurant_list
         """Фільтрує ресторани по меню (якщо користувач шукає конкретну страву)"""
         user_lower = user_request.lower()
         
