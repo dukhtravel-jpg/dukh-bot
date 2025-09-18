@@ -886,6 +886,12 @@ class EnhancedRestaurantBot:
                 logger.error("❌ Немає даних про ресторани")
                 return None
             
+            import random
+            shuffled_restaurants = self.restaurants_data.copy()
+            random.shuffle(shuffled_restaurants)
+            
+            logger.info(f"🎲 Перемішав порядок ресторанів для різноманітності")
+            
             # 🔍 ПЕРЕВІРКА НАЯВНОСТІ СТРАВИ В МЕНЮ
             has_dish, dishes_info = self._check_dish_availability(user_request)
             
@@ -938,10 +944,6 @@ class EnhancedRestaurantBot:
                     
                     logger.info(f"🍽️ Відфільтровано до {len(dish_filtered_restaurants)} ресторанів з потрібними стравами з {len(shuffled_restaurants)}")
                     shuffled_restaurants = dish_filtered_restaurants
-            
-            import random
-            shuffled_restaurants = self.restaurants_data.copy()
-            random.shuffle(shuffled_restaurants)
             
             logger.info(f"🎲 Перемішав порядок ресторанів для різноманітності")
             
