@@ -420,11 +420,14 @@ class EnhancedRestaurantBot:
             
             # 3. Синоніми
             if ENHANCED_SEARCH_CONFIG['extended_synonyms']:
-                synonym_match, synonym_confidence, synonym_words = self._check_synonyms(user_lower, keyword)
-                if synonym_match:
-                    confidence = max(confidence, synonym_confidence * 0.7)  # Синоніми трохи менш пріоритетні
-                    any_match = True
-                    found_keywords.extend([f"{keyword}→{sw}" for sw in synonym_words])
+                try:
+                    synonym_match, synonym_confidence, synonym_words = self._check_synonyms(user_lower, keyword)
+                    if synonym_match:
+                        confidence = max(confidence, synonym_confidence * 0.7)  # Синоніми трохи менш пріоритетні
+                        any_match = True
+                        found_keywords.extend([f"{keyword}→{sw}" for sw in synonym_words])
+                except Exception as e:
+                    logger.warning(f"⚠️ Помилка перевірки синонімів для '{keyword}': {e}")
             
             max_confidence = max(max_confidence, confidence)
         
