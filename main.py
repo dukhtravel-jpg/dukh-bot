@@ -1,4 +1,13 @@
-import logging
+# Просимо оцінити ПРІОРИТЕТНИЙ варіант через кнопки
+            keyboard = [
+                [InlineKeyboardButton(f"{i}", callback_data=f"rating_{i}") for i in range(1, 6)],
+                [InlineKeyboardButton(f"{i}", callback_data=f"rating_{i}") for i in range(6, 11)],
+                [InlineKeyboardButton("Пропустити", callback_data="skip_rating")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            rating_text = f"""Оціни ПРІОРИТЕТНУ рекомендацію від 1 до 10
+(оцінюimport logging
 import os
 from typing import Dict, Optional, List, Tuple
 import asyncio
@@ -8,8 +17,8 @@ from datetime import datetime
 
 import gspread
 from google.oauth2.service_account import Credentials
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
 # Додаємо fuzzy matching для кращого пошуку
 try:
@@ -1089,6 +1098,155 @@ class EnhancedRestaurantBot:
 # Глобальний екземпляр покращеного бота
 restaurant_bot = EnhancedRestaurantBot()
 
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробник натискань кнопок"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    
+    if query.data == "skip_rating":
+        # Пропустити оцінювання
+        await query.edit_message_text(
+            "Дякую! Напишіть /start для нової рекомендації"
+        )
+        
+        # Очищуємо стани
+        user_states[user_id] = "completed"
+        if user_id in user_last_recommendation:
+            del user_last_recommendation[user_id]
+        if user_id in user_rating_data:
+            del user_rating_data[user_id]
+        
+        logger.info(f"Користувач {user_id} пропустив оцінювання")
+        
+    elif query.data.startswith("rating_"):
+        # Обробка оцінки через кнопку
+        rating = int(query.data.split("_")[1])
+        restaurant_name = user_last_recommendation.get(user_id, "Невідомий ресторан")
+        
+        user_rating_data[user_id] = {
+            'rating': rating,
+            'restaurant_name': restaurant_name,
+            'user_request': 'Оцінка через кнопку'
+        }
+        
+        user_states[user_id] = "waiting_explanation"
+        
+        await query.edit_message_text(
+            f"Дякую за оцінку {rating}/10!\n\n"
+            f"Чи можеш пояснити чому така оцінка?\n"
+            f"Напиши, що сподобалось або не сподобалось у рекомендації."
+        )
+        
+        logger.info(f"Користувач {user_id} оцінив через кнопку: {rating}/10")
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробник натискань кнопок"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    
+    if query.data == "skip_rating":
+        # Пропустити оцінювання
+        await query.edit_message_text(
+            "Дякую! Напишіть /start для нової рекомендації 😊"
+        )
+        
+        # Очищуємо стани
+        user_states[user_id] = "completed"
+        if user_id in user_last_recommendation:
+            del user_last_recommendation[user_id]
+        if user_id in user_rating_data:
+            del user_rating_data[user_id]
+        
+        logger.info(f"👤 Користувач {user_id} пропустив оцінювання")
+        
+    elif query.data.startswith("rating_"):
+        # Обробка оцінки через кнопку
+        rating = int(query.data.split("_")[1])
+        restaurant_name = user_last_recommendation.get(user_id, "Невідомий ресторан")
+        
+        user_rating_data[user_id] = {
+            'rating': rating,
+            'restaurant_name': restaurant_name,
+            'user_request': 'Оцінка через кнопку'
+        }
+        
+        user_states[user_id] = "waiting_explanation"
+        
+        await query.edit_message_text(
+            f"Дякую за оцінку {rating}/10! ⭐\n\n"
+            f"🤔 <b>Чи можеш пояснити чому така оцінка?</b>\n"
+            f"Напиши, що сподобалось або не сподобалось у рекомендації.\n\n"
+            f"Або напиши /start щоб пропустити пояснення.",
+            parse_mode='HTML'
+        )
+        
+        logger.info(f"⭐ Користувач {user_id} оцінив через кнопку: {rating}/10")
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /help"""
+    help_text = """🤖 <b>Довідка по боту</b>
+
+<b>Доступні команди:</b>
+/start - Почати пошук ресторану
+/help - Показати цю довідку  
+/list_restaurants - Список всіх ресторанів
+
+<b>Як користуватись:</b>
+1️⃣ Напишіть /start
+2️⃣ Опишіть що шукаєте (наприклад: "хочу піцу з друзями")
+3️⃣ Отримайте 1-2 найкращі рекомендації
+4️⃣ Оцініть результат (необов'язково)
+
+<b>Приклади запитів:</b>
+• "Ресторан для романтичного побачення"
+• "Кав'ярня для роботи з ноутбуком"
+• "Швидкий перекус біля центру"
+• "Сімейне місце з дітьми"
+
+Бот розуміє синоніми, опечатки та заперечення!"""
+    
+    await update.message.reply_text(help_text, parse_mode='HTML')
+    logger.info(f"ℹ️ Показано довідку користувачу {update.effective_user.id}")
+
+async def list_restaurants_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /list_restaurants"""
+    if not restaurant_bot.restaurants_data:
+        await update.message.reply_text("База ресторанів недоступна або порожня.")
+        return
+    
+    # Групуємо по типах
+    restaurants_by_type = {}
+    for restaurant in restaurant_bot.restaurants_data:
+        rest_type = restaurant.get('тип закладу', restaurant.get('type', 'Інше'))
+        if rest_type not in restaurants_by_type:
+            restaurants_by_type[rest_type] = []
+        restaurants_by_type[rest_type].append(restaurant.get('name', 'Без назви'))
+    
+    response_text = "📋 <b>Список всіх закладів у базі:</b>\n\n"
+    
+    for rest_type, restaurants in restaurants_by_type.items():
+        response_text += f"🏢 <b>{rest_type.title()}:</b>\n"
+        for restaurant in restaurants:
+            response_text += f"  • {restaurant}\n"
+        response_text += "\n"
+    
+    response_text += f"<i>Всього закладів: {len(restaurant_bot.restaurants_data)}</i>\n\n"
+    response_text += "Для персоналізованої рекомендації використайте /start"
+    
+    # Розбиваємо довге повідомлення якщо потрібно
+    if len(response_text) > 4096:
+        parts = [response_text[i:i+4000] for i in range(0, len(response_text), 4000)]
+        for part in parts:
+            await update.message.reply_text(part, parse_mode='HTML')
+    else:
+        await update.message.reply_text(response_text, parse_mode='HTML')
+    
+    logger.info(f"📋 Показано список ресторанів користувачу {update.effective_user.id}")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробник команди /start"""
     user_id = update.effective_user.id
@@ -1175,12 +1333,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_request = user_text
         logger.info(f"📝 Користувач {user_id} написав: {user_request}")
         
-        processing_message = await update.message.reply_text("🔍 Шукаю ідеальний ресторан для вас...")
+        # Покращені статусні повідомлення
+        status_message = await update.message.reply_text("🔍 Шукаю ідеальний ресторан для вас...")
+        
+        # Оновлюємо статус під час обробки
+        await asyncio.sleep(0.5)
+        await status_message.edit_text("📊 Аналізую ваш запит та фільтрую заклади...")
         
         recommendation = await restaurant_bot.get_recommendation(user_request)
         
+        await asyncio.sleep(0.3)
+        await status_message.edit_text("🤖 Використовую ШІ для вибору найкращих варіантів...")
+        
         try:
-            await processing_message.delete()
+            await status_message.delete()
         except:
             pass
         
@@ -1262,15 +1428,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(response_text, parse_mode='HTML')
                 logger.info(f"✅ Надіслано текстові рекомендації: {main_restaurant['name']}")
             
-            # Просимо оцінити ПРІОРИТЕТНИЙ варіант
-            rating_text = f"""⭐ <b>Оціни ПРІОРИТЕТНУ рекомендацію від 1 до 10</b>
+            # Просимо оцінити ПРІОРИТЕТНИЙ варіант через кнопки
+            keyboard = [
+                [InlineKeyboardButton(f"{i}", callback_data=f"rating_{i}") for i in range(1, 6)],
+                [InlineKeyboardButton(f"{i}", callback_data=f"rating_{i}") for i in range(6, 11)],
+                [InlineKeyboardButton("⏭️ Пропустити", callback_data="skip_rating")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            rating_text = f"""⭐ <b>Оціни ПРІОРИТЕТНУ рекомендацію</b>
 (оцінюємо "{main_restaurant['name']}")
 
-1 - зовсім не підходить
-10 - ідеально підходить
-
-Напиши цифру в чаті 👇"""
-            await update.message.reply_text(rating_text, parse_mode='HTML')
+1 = зовсім не підходить  |  10 = ідеально підходить
+Або можна пропустити оцінювання 👇"""
+            
+            await update.message.reply_text(
+                rating_text, 
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
             
         else:
             await update.message.reply_text("Вибачте, не знайшов закладів з потрібними стравами. Спробуйте змінити запит або вказати конкретну страву.")
@@ -1360,6 +1536,9 @@ def main():
         
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("stats", stats_command))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("list_restaurants", list_restaurants_command))
+        application.add_handler(CallbackQueryHandler(button_callback))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         application.add_error_handler(error_handler)
         
