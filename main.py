@@ -474,6 +474,35 @@ class EnhancedRestaurantBot:
                         logger.info(f"📚 SYNONYM: '{keyword}' → '{synonym}'")
         
         return len(found_synonyms) > 0, max_confidence, found_synonyms
+    
+    def _get_dish_keywords(self, dish: str) -> List[str]:
+        """Повертає список ключових слів для конкретної страви"""
+        food_keywords = {
+            'піца': ['піца', 'піцц', 'pizza', 'піци', 'піззу'],
+            'паста': ['паста', 'спагеті', 'pasta', 'спагетті', 'макарони'],
+            'бургер': ['бургер', 'burger', 'гамбургер', 'чізбургер'],
+            'суші': ['суші', 'sushi', 'роли', 'ролл', 'сашімі'],
+            'салат': ['салат', 'salad'],
+            'хумус': ['хумус', 'hummus'],
+            'фалафель': ['фалафель', 'falafel'],
+            'шаурма': ['шаурм', 'shawarma', 'шаверма'],
+            'стейк': ['стейк', 'steak', 'м\'ясо', 'біфштекс'],
+            'риба': ['риба', 'fish', 'лосось', 'семга', 'тунець', 'форель'],
+            'курка': ['курк', 'курчат', 'chicken', 'курица'],
+            'десерт': ['десерт', 'торт', 'тірамісу', 'морозиво', 'чізкейк', 'тістечко'],
+            'мідії': ['мідії', 'мидии', 'мідія', 'молюски', 'мідій'],
+            'креветки': ['креветки', 'креветка', 'shrimp', 'prawns'],
+            'устриці': ['устриці', 'устрица', 'oysters'],
+            'каламари': ['каламари', 'кальмари', 'squid'],
+            'равіолі': ['равіолі', 'ravioli', 'равиоли'],
+            'лазанья': ['лазанья', 'lasagna', 'лазања'],
+            'різотто': ['різотто', 'risotto', 'ризотто'],
+            'гнокі': ['гноки', 'gnocchi', 'ньокі'],
+            'тартар': ['тартар', 'tartar'],
+            'карпачо': ['карпачо', 'carpaccio'],
+        }
+        
+        return food_keywords.get(dish, [dish])
 
     def _enhanced_filter_by_establishment_type(self, user_request: str, restaurant_list):
         """Покращена фільтрація за типом закладу"""
@@ -859,15 +888,56 @@ class EnhancedRestaurantBot:
             
             # 🔍 ПЕРЕВІРКА НАЯВНОСТІ СТРАВИ В МЕНЮ
             has_dish, dishes_info = self._check_dish_availability(user_request)
-            if not has_dish and dishes_info:  # Якщо користувач шукав конкретну страву, але її немає
-                missing_dishes = ", ".join(dishes_info)
-                logger.warning(f"❌ ВІДСУТНЯ СТРАВА: користувач шукав '{missing_dishes}', але її немає в жодному ресторані")
-                
-                return {
-                    "dish_not_found": True,
-                    "missing_dishes": missing_dishes,
-                    "message": f"На жаль, {missing_dishes} ще немає в нашому переліку. Спробуй іншу страву!"
-                }
+            
+            # Якщо користувач шукав конкретні страви
+            if dishes_info:  # Якщо були знайдені конкретні страви в запиті
+                if not has_dish:  # Але їх немає в меню ресторанів
+                    missing_dishes = ", ".join(dishes_info)
+                    logger.warning(f"❌ ВІДСУТНЯ СТРАВА: користувач шукав '{missing_dishes}', але її немає в жодному ресторані")
+                    
+                    return {
+                        "dish_not_found": True,
+                        "missing_dishes": missing_dishes,
+                        "message": f"На жаль, {missing_dishes} ще немає в нашому переліку. Спробуй іншу страву!"
+                    }
+                else:  # Страви є - фільтруємо тільки ресторани з цими стравами
+                    logger.info(f"🎯 ФОКУС НА СТРАВАХ: користувач шукав '{dishes_info}' - фільтрую тільки ресторани з цими стравами")
+                    # Фільтруємо shuffled_restaurants до тільки тих, що мають потрібні страви
+                    dish_filtered_restaurants = []
+                    for restaurant in shuffled_restaurants:
+                        menu_text = restaurant.get('menu', '').lower()
+                        has_required_dish = False
+                        
+                        for dish in dishes_info:
+                            dish_keywords = self._get_dish_keywords(dish)
+                            for keyword in dish_keywords:
+                                if ENHANCED_SEARCH_CONFIG['regex_boundaries']:
+                                    pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
+                                    if re.search(pattern, menu_text):
+                                        has_required_dish = True
+                                        logger.info(f"   ✅ {restaurant.get('name', '')} має {dish}")
+                                        break
+                                else:
+                                    if keyword.lower() in menu_text:
+                                        has_required_dish = True
+                                        logger.info(f"   ✅ {restaurant.get('name', '')} має {dish}")
+                                        break
+                            if has_required_dish:
+                                break
+                        
+                        if has_required_dish:
+                            dish_filtered_restaurants.append(restaurant)
+                    
+                    if not dish_filtered_restaurants:
+                        logger.error(f"❌ КРИТИЧНА ПОМИЛКА: функція сказала що страви є, але фільтр не знайшов ресторанів")
+                        return {
+                            "dish_not_found": True,
+                            "missing_dishes": ", ".join(dishes_info),
+                            "message": f"На жаль, {', '.join(dishes_info)} ще немає в нашому переліку. Спробуй іншу страву!"
+                        }
+                    
+                    logger.info(f"🍽️ Відфільтровано до {len(dish_filtered_restaurants)} ресторанів з потрібними стравами з {len(shuffled_restaurants)}")
+                    shuffled_restaurants = dish_filtered_restaurants
             
             import random
             shuffled_restaurants = self.restaurants_data.copy()
