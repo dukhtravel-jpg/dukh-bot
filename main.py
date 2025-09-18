@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Tuple
 import asyncio
 import json
 import re
@@ -10,6 +10,15 @@ import gspread
 from google.oauth2.service_account import Credentials
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+
+# Додаємо fuzzy matching для кращого пошуку
+try:
+    from fuzzywuzzy import fuzz
+    FUZZY_AVAILABLE = True
+except ImportError:
+    FUZZY_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("fuzzywuzzy не встановлено. Fuzzy matching буде відключено.")
 
 # Налаштування логування
 logging.basicConfig(
@@ -25,18 +34,54 @@ GOOGLE_CREDENTIALS_JSON = os.getenv('GOOGLE_CREDENTIALS_JSON')
 GOOGLE_SHEET_URL = os.getenv('GOOGLE_SHEET_URL')
 ANALYTICS_SHEET_URL = os.getenv('ANALYTICS_SHEET_URL', GOOGLE_SHEET_URL)
 
+# Конфігурація покращеного пошуку
+ENHANCED_SEARCH_CONFIG = {
+    'enabled': True,  # Головний перемикач
+    'fuzzy_matching': True,  # Fuzzy matching
+    'fuzzy_threshold': 80,  # Мінімальний % схожості для fuzzy match
+    'regex_boundaries': True,  # Використання word boundaries
+    'negation_detection': True,  # Детекція заперечень
+    'extended_synonyms': True,  # Розширені синоніми
+    'fallback_to_old': True  # Fallback до старої логіки якщо нова не знайде результатів
+}
+
 # Глобальні змінні
 openai_client = None
 user_states: Dict[int, str] = {}
 user_last_recommendation: Dict[int, str] = {}
 user_rating_data: Dict[int, Dict] = {}
 
-class RestaurantBot:
+class EnhancedRestaurantBot:
     def __init__(self):
         self.restaurants_data = []
         self.google_sheets_available = False
         self.analytics_sheet = None
         self.gc = None
+        
+        # Розширені словники синонімів
+        self.extended_synonyms = {
+            # Типи закладів
+            'ресторан': ['ресторан', 'ресторани', 'ресторанчик', 'їдальня', 'заклад'],
+            'кав\'ярня': ['кав\'ярня', 'кафе', 'кава', 'кавярня', 'coffee', 'кофе'],
+            'піца': ['піца', 'піцца', 'pizza', 'піци', 'піззу'],
+            'суші': ['суші', 'sushi', 'роли', 'ролли', 'сашімі'],
+            'бургер': ['бургер', 'burger', 'гамбургер', 'чізбургер'],
+            
+            # Атмосфера
+            'романтик': ['романтик', 'романтичний', 'побачення', 'інтимний', 'затишний', 'свічки'],
+            'сімейний': ['сімейний', 'сім\'я', 'родина', 'діти', 'дитячий', 'для всієї сім\'ї'],
+            'веселий': ['веселий', 'жвавий', 'енергійний', 'гучний', 'драйвовий', 'молодіжний'],
+            
+            # Контекст
+            'швидко': ['швидко', 'швидку', 'швидкий', 'fast', 'перекус', 'поспішаю', 'на швидку руку'],
+            'доставка': ['доставка', 'додому', 'не хочу йти', 'привезти', 'delivery']
+        }
+        
+        # Слова-заперечення
+        self.negation_words = [
+            'не', 'ні', 'ніколи', 'ніде', 'без', 'нема', 'немає', 
+            'не хочу', 'не люблю', 'не подобається', 'не треба'
+        ]
     
     def _convert_google_drive_url(self, url: str) -> str:
         """Перетворює Google Drive посилання в пряме посилання для зображення"""
@@ -50,9 +95,9 @@ class RestaurantBot:
             logger.info(f"Перетворено Google Drive посилання: {url} → {direct_url}")
             return direct_url
         
-        logger.warning(f"Не вдалося витягнути ID з Google Drive посилання: {url}")
+        logger.warning(f"Не вдалось витягнути ID з Google Drive посилання: {url}")
         return url
-        
+    
     async def init_google_sheets(self):
         """Ініціалізація підключення до Google Sheets"""
         if not GOOGLE_CREDENTIALS_JSON or not GOOGLE_SHEET_URL:
@@ -87,7 +132,7 @@ class RestaurantBot:
             await self.init_analytics_sheet()
                 
         except Exception as e:
-            logger.error(f"Детальна помилка Google Sheets: {type(e).__name__}: {str(e)}")
+            logger.error(f"Деталька помилка Google Sheets: {type(e).__name__}: {str(e)}")
     
     async def init_analytics_sheet(self):
         """Ініціалізація аналітичної таблиці"""
@@ -117,7 +162,7 @@ class RestaurantBot:
                     logger.warning(f"⚠️ Помилка перевірки заголовків: {header_error}")
                     
             except gspread.WorksheetNotFound:
-                logger.info("📝 Аркуш Analytics не знайдено, створюю новий...")
+                logger.info("📄 Аркуш Analytics не знайдено, створюю новий...")
                 
                 self.analytics_sheet = analytics_sheet.add_worksheet(title="Analytics", rows="1000", cols="12")
                 logger.info("✅ Створено новий лист Analytics")
@@ -137,7 +182,7 @@ class RestaurantBot:
                 logger.info("✅ Створено новий лист Summary")
                 
                 summary_data = [
-                    ["Метрика", "Значення", "Останнє оновлення"],
+                    ["Метрика", "Значення", "Остання оновлення"],
                     ["Загальна кількість запитів", "0", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
                     ["Кількість унікальних користувачів", "0", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
                     ["Середня оцінка відповідності", "0", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
@@ -196,27 +241,219 @@ class RestaurantBot:
             logger.error(f"❌ Помилка тесту запису: {e}")
             return False
 
-    def _filter_by_establishment_type(self, user_request: str, restaurant_list):
-        """Фільтрує ресторани за типом закладу"""
-        user_lower = user_request.lower()
-        logger.info(f"🏢 ДІАГНОСТИКА: Аналізую запит '{user_request}'")
+    def _enhanced_keyword_match(self, user_text: str, keywords: List[str], context: str = "") -> Tuple[bool, float, List[str]]:
+        """
+        Покращений пошук ключових слів з різними методами
         
-        # ДІАГНОСТИКА: Показуємо структуру даних
-        if restaurant_list:
-            first_restaurant = restaurant_list[0]
-            logger.info(f"🔍 ДІАГНОСТИКА: Приклад структури ресторану:")
-            logger.info(f"   Ключі: {list(first_restaurant.keys())}")
-            logger.info(f"   Тип закладу: '{first_restaurant.get('тип закладу', 'НЕ ЗНАЙДЕНО')}'")
-            logger.info(f"   Type: '{first_restaurant.get('type', 'НЕ ЗНАЙДЕНО')}'")
+        Returns:
+            (знайдено, впевненість, знайдені_слова)
+        """
+        if not ENHANCED_SEARCH_CONFIG['enabled']:
+            # Fallback до старої логіки
+            old_match = any(keyword in user_text.lower() for keyword in keywords)
+            return old_match, 1.0 if old_match else 0.0, []
+        
+        user_lower = user_text.lower()
+        found_keywords = []
+        max_confidence = 0.0
+        any_match = False
+        
+        # Спочатку перевіряємо заперечення
+        if ENHANCED_SEARCH_CONFIG['negation_detection']:
+            if self._has_negation_near_keywords(user_text, keywords):
+                logger.info(f"🚫 NEGATION: Знайдено заперечення для {keywords[:3]}...")
+                return False, 0.0, []
+        
+        for keyword in keywords:
+            keyword_lower = keyword.lower()
+            confidence = 0.0
+            
+            # 1. Exact match (найвища пріоритетність)
+            if keyword_lower in user_lower:
+                if ENHANCED_SEARCH_CONFIG['regex_boundaries']:
+                    # Перевіряємо word boundaries щоб уникнути false positives
+                    pattern = r'\b' + re.escape(keyword_lower) + r'\b'
+                    if re.search(pattern, user_lower):
+                        confidence = 1.0
+                        any_match = True
+                        found_keywords.append(keyword)
+                        logger.info(f"✅ EXACT: '{keyword}' знайдено з word boundaries")
+                else:
+                    confidence = 0.9  # Трохи менше за exact з boundaries
+                    any_match = True
+                    found_keywords.append(keyword)
+                    logger.info(f"✅ SUBSTRING: '{keyword}' знайдено (без boundaries)")
+            
+            # 2. Fuzzy matching для опечаток
+            elif ENHANCED_SEARCH_CONFIG['fuzzy_matching'] and FUZZY_AVAILABLE:
+                # Розбиваємо на слова і перевіряємо кожне
+                user_words = user_lower.split()
+                for user_word in user_words:
+                    if len(user_word) > 2 and len(keyword_lower) > 2:  # Тільки для слів довше 2 символів
+                        fuzzy_score = fuzz.ratio(keyword_lower, user_word)
+                        if fuzzy_score >= ENHANCED_SEARCH_CONFIG['fuzzy_threshold']:
+                            confidence = max(confidence, fuzzy_score / 100.0 * 0.8)  # Fuzzy менш пріоритетний
+                            any_match = True
+                            found_keywords.append(f"{keyword}~{user_word}")
+                            logger.info(f"🔍 FUZZY: '{keyword}' ≈ '{user_word}' (score: {fuzzy_score})")
+            
+            # 3. Синоніми
+            if ENHANCED_SEARCH_CONFIG['extended_synonyms']:
+                synonym_match, synonym_confidence, synonym_words = self._check_synonyms(user_lower, keyword)
+                if synonym_match:
+                    confidence = max(confidence, synonym_confidence * 0.7)  # Синоніми трохи менш пріоритетні
+                    any_match = True
+                    found_keywords.extend([f"{keyword}→{sw}" for sw in synonym_words])
+            
+            max_confidence = max(max_confidence, confidence)
+        
+        return any_match, max_confidence, found_keywords
+    
+    def _has_negation_near_keywords(self, user_text: str, keywords: List[str], window: int = 5) -> bool:
+        """Перевіряє чи є заперечення поблизу ключових слів"""
+        user_lower = user_text.lower()
+        words = user_lower.split()
+        
+        # Знаходимо позиції ключових слів
+        keyword_positions = []
+        for i, word in enumerate(words):
+            for keyword in keywords:
+                if keyword.lower() in word or (FUZZY_AVAILABLE and fuzz.ratio(keyword.lower(), word) > 85):
+                    keyword_positions.append(i)
+        
+        # Перевіряємо заперечення в околиці
+        for pos in keyword_positions:
+            start = max(0, pos - window)
+            end = min(len(words), pos + window + 1)
+            
+            for i in range(start, end):
+                if i != pos:  # Не перевіряємо саме ключове слово
+                    word = words[i]
+                    for negation in self.negation_words:
+                        if negation in word or word in negation:
+                            logger.info(f"🚫 Знайдено заперечення '{negation}' поблизу позиції {pos}")
+                            return True
+        
+        return False
+    
+    def _check_synonyms(self, user_text: str, keyword: str) -> Tuple[bool, float, List[str]]:
+        """Перевіряє синоніми для ключового слова"""
+        keyword_lower = keyword.lower()
+        found_synonyms = []
+        max_confidence = 0.0
+        
+        # Перевіряємо чи є keyword в наших розширених синонімах
+        for base_word, synonyms in self.extended_synonyms.items():
+            if keyword_lower in [s.lower() for s in synonyms]:
+                # Перевіряємо всі синоніми цієї групи
+                for synonym in synonyms:
+                    if synonym.lower() in user_text:
+                        found_synonyms.append(synonym)
+                        max_confidence = max(max_confidence, 0.8)  # Високий рейтинг для синонімів
+                        logger.info(f"📚 SYNONYM: '{keyword}' → '{synonym}'")
+        
+        return len(found_synonyms) > 0, max_confidence, found_synonyms
+
+    def _enhanced_filter_by_establishment_type(self, user_request: str, restaurant_list):
+        """Покращена фільтрація за типом закладу"""
+        user_lower = user_request.lower()
+        logger.info(f"🏢 ENHANCED: Аналізую запит '{user_request}'")
+        
+        if not restaurant_list:
+            return restaurant_list
+        
+        # Покращені категорії з розширеними синонімами
+        enhanced_type_keywords = {
+            'ресторан': {
+                'user_keywords': ['ресторан', 'ресторани', 'ресторанчик', 'обід', 'вечеря', 'побачення', 'романтик', 'святкування', 'банкет', 'посідіти', 'поїсти', 'заклад'],
+                'establishment_types': ['ресторан']
+            },
+            'кав\'ярня': {
+                'user_keywords': ['кава', 'капучіно', 'латте', 'еспресо', 'кав\'ярня', 'десерт', 'тірамісу', 'круасан', 'випити кави', 'кофе', 'кафе', 'coffee'],
+                'establishment_types': ['кав\'ярня', 'кафе']
+            },
+            'to-go': {
+                'user_keywords': ['швидко', 'на винос', 'перекус', 'поспішаю', 'to-go', 'takeaway', 'на швидку руку', 'перехопити'],
+                'establishment_types': ['to-go', 'takeaway']
+            },
+            'доставка': {
+                'user_keywords': ['доставка', 'додому', 'замовити', 'привезти', 'delivery', 'не хочу йти', 'вдома'],
+                'establishment_types': ['доставка', 'delivery']
+            }
+        }
+        
+        # Знаходимо відповідний тип закладу з покращеним пошуком
+        detected_types = []
+        detection_details = []
+        
+        for establishment_type, keywords in enhanced_type_keywords.items():
+            match_found, confidence, found_words = self._enhanced_keyword_match(
+                user_request, 
+                keywords['user_keywords'], 
+                f"establishment_type_{establishment_type}"
+            )
+            
+            if match_found:
+                detected_types.extend(keywords['establishment_types'])
+                detection_details.append({
+                    'type': establishment_type,
+                    'confidence': confidence,
+                    'found_words': found_words
+                })
+                logger.info(f"🎯 ENHANCED: Виявлено тип '{establishment_type}' з впевненістю {confidence:.2f}")
+        
+        # Якщо тип не визначено, не фільтруємо
+        if not detected_types:
+            logger.info("🏢 ENHANCED: Тип закладу не визначено, повертаю всі заклади")
+            return restaurant_list
+        
+        logger.info(f"🏢 ENHANCED: Шукані типи закладів: {detected_types}")
+        
+        # Фільтруємо за типом закладу
+        filtered_restaurants = []
+        for restaurant in restaurant_list:
+            establishment_type = restaurant.get('тип закладу', restaurant.get('type', '')).lower().strip()
+            
+            # Перевіряємо збіг типу закладу
+            type_match = any(
+                detected_type.lower().strip() in establishment_type or 
+                establishment_type in detected_type.lower().strip() 
+                for detected_type in detected_types
+            )
+            
+            if type_match:
+                filtered_restaurants.append(restaurant)
+                logger.info(f"   ✅ ENHANCED: {restaurant.get('name', '')}: тип '{establishment_type}' ПІДХОДИТЬ")
+            else:
+                logger.info(f"   ❌ ENHANCED: {restaurant.get('name', '')}: тип '{establishment_type}' НЕ ПІДХОДИТЬ")
+        
+        # Fallback до старої логіки якщо нова не знайшла результатів
+        if not filtered_restaurants and ENHANCED_SEARCH_CONFIG['fallback_to_old']:
+            logger.warning("⚠️ ENHANCED: Нова логіка не знайшла результатів, fallback до старої")
+            return self._filter_by_establishment_type(user_request, restaurant_list)
+        
+        if filtered_restaurants:
+            logger.info(f"🏢 ENHANCED: УСПІХ! Відфільтровано {len(filtered_restaurants)} закладів відповідного типу з {len(restaurant_list)}")
+        else:
+            logger.warning(f"🏢 ENHANCED: ПРОБЛЕМА! Жоден заклад не підходить за типом, повертаю всі {len(restaurant_list)} закладів")
+            return restaurant_list
+        
+        return filtered_restaurants
+    
+    # Старі методи залишаємо для fallback
+    def _filter_by_establishment_type(self, user_request: str, restaurant_list):
+        """СТАРА ЛОГІКА: Фільтрує ресторани за типом закладу"""
+        user_lower = user_request.lower()
+        logger.info(f"🏢 OLD: Аналізую запит '{user_request}'")
         
         # Визначаємо тип закладу з запиту користувача
         type_keywords = {
             'ресторан': {
-                'user_keywords': ['ресторан', 'обід', 'вечеря', 'побачення', 'романтик', 'святкув', 'банкет', 'посидіти', 'поїсти'],
+                'user_keywords': ['ресторан', 'обід', 'вечеря', 'побачення', 'романтик', 'святкув', 'банкет', 'посідіти', 'поїсти'],
                 'establishment_types': ['ресторан']
             },
             'кав\'ярня': {
-                'user_keywords': ['кава', 'капучіно', 'латте', 'еспресо', 'кав\'ярн', 'десерт', 'тирамісу', 'круасан', 'випити кави', 'кофе', 'кафе'],
+                'user_keywords': ['кава', 'капучіно', 'латте', 'еспресо', 'кав\'ярня', 'десерт', 'тірамісу', 'круасан', 'випити кави', 'кофе', 'кафе'],
                 'establishment_types': ['кав\'ярня', 'кафе']
             },
             'to-go': {
@@ -235,38 +472,24 @@ class RestaurantBot:
             user_match = any(keyword in user_lower for keyword in keywords['user_keywords'])
             if user_match:
                 detected_types.extend(keywords['establishment_types'])
-                logger.info(f"🎯 ДІАГНОСТИКА: Виявлено збіг '{establishment_type}' за словами: {[kw for kw in keywords['user_keywords'] if kw in user_lower]}")
+                logger.info(f"🎯 OLD: Виявлено збіг '{establishment_type}'")
         
         # Якщо тип не визначено, не фільтруємо
         if not detected_types:
-            logger.info("🏢 ДІАГНОСТИКА: Тип закладу не визначено, повертаю всі заклади")
+            logger.info("🏢 OLD: Тип закладу не визначено, повертаю всі заклади")
             return restaurant_list
-        
-        logger.info(f"🏢 ДІАГНОСТИКА: Шуканий тип(и) закладів: {detected_types}")
         
         # Фільтруємо за типом закладу
         filtered_restaurants = []
         for restaurant in restaurant_list:
             establishment_type = restaurant.get('тип закладу', restaurant.get('type', '')).lower().strip()
-            
-            logger.info(f"🔍 ДІАГНОСТИКА: Перевіряю '{restaurant.get('name', '')}' - тип: '{establishment_type}'")
-            
-            # Перевіряємо чи збігається тип закладу
             type_match = any(detected_type.lower().strip() in establishment_type or establishment_type in detected_type.lower().strip() 
                            for detected_type in detected_types)
             
             if type_match:
                 filtered_restaurants.append(restaurant)
-                logger.info(f"   ✅ ДІАГНОСТИКА: {restaurant.get('name', '')}: тип '{establishment_type}' ПІДХОДИТЬ")
-            else:
-                logger.info(f"   ❌ ДІАГНОСТИКА: {restaurant.get('name', '')}: тип '{establishment_type}' НЕ ПІДХОДИТЬ (шукаємо {detected_types})")
         
-        if filtered_restaurants:
-            logger.info(f"🏢 ДІАГНОСТИКА: УСПІХ! Відфільтровано {len(filtered_restaurants)} закладів відповідного типу з {len(restaurant_list)}")
-            return filtered_restaurants
-        else:
-            logger.warning(f"⚠️ ДІАГНОСТИКА: ПРОБЛЕМА! Жоден заклад не підходить за типом. Повертаю всі {len(restaurant_list)} закладів")
-            return restaurant_list
+        return filtered_restaurants if filtered_restaurants else restaurant_list
 
     def _filter_by_vibe(self, user_request: str, restaurant_list):
         """Фільтрує ресторани за атмосферою (vibe)"""
@@ -275,12 +498,12 @@ class RestaurantBot:
         
         # Ключові слова для атмосфери
         vibe_keywords = {
-            'романтичн': ['романт', 'побачен', 'інтимн', 'затишн', 'свічки', 'романс', 'двох'],
-            'веsel': ['весел', 'живо', 'енергійн', 'гучн', 'драйв', 'динамічн'],
-            'спокійн': ['спокійн', 'тих', 'релакс', 'умиротворен'],
-            'елегантн': ['елегантн', 'розкішн', 'стильн', 'преміум', 'вишукан'],
+            'романтичний': ['романт', 'побачен', 'інтимн', 'затишн', 'свічки', 'романс', 'двох'],
+            'веселий': ['весел', 'живо', 'енергійн', 'гучн', 'драйв', 'динамічн'],
+            'спокійний': ['спокійн', 'тих', 'релакс', 'умиротворен'],
+            'елегантний': ['елегантн', 'розкішн', 'стильн', 'преміум', 'вишукан'],
             'casual': ['casual', 'невимушен', 'простий', 'домашн'],
-            'затишн': ['затишн', 'домашн', 'теплий', 'комфортн']
+            'затишний': ['затишн', 'домашн', 'теплий', 'комфортн']
         }
         
         # Знаходимо відповідну атмосферу
@@ -327,7 +550,7 @@ class RestaurantBot:
         
         # Ключові слова для призначення
         aim_keywords = {
-            'сімейн': ['сім', 'діт', 'родин', 'батьк', 'мам', 'дитин', 'всією родиною'],
+            'сімейний': ['сім', 'діт', 'родин', 'батьк', 'мам', 'дитин'],
             'діл': ['діл', 'зустріч', 'перегов', 'бізнес', 'робоч', 'офіс', 'партнер'],
             'друз': ['друз', 'компан', 'гуртом', 'тусовк', 'молодіжн'],
             'пар': ['пар', 'двох', 'побачен', 'романт', 'коханої', 'коханого'],
@@ -381,7 +604,7 @@ class RestaurantBot:
         context_filters = {
             'romantic': {
                 'user_keywords': ['романт', 'побачен', 'двох', 'інтимн', 'затишн', 'свічки', 'романс'],
-                'restaurant_keywords': ['романт', 'інтимн', 'затишн', 'для пар', 'камерн', 'приват']
+                'restaurant_keywords': ['інтимн', 'романт', 'для пар', 'камерн', 'приват']
             },
             'family': {
                 'user_keywords': ['сім', 'діт', 'родин', 'батьк', 'мам', 'дитин'],
@@ -412,7 +635,7 @@ class RestaurantBot:
                 detected_contexts.append(context)
         
         if not detected_contexts:
-            logger.info("📝 Контекст не визначено, повертаю всі ресторани")
+            logger.info("🔍 Контекст не визначено, повертаю всі ресторани")
             return restaurant_list
         
         logger.info(f"🎯 Виявлено контекст(и): {detected_contexts}")
@@ -458,9 +681,9 @@ class RestaurantBot:
             'хумус': ['хумус', 'hummus'],
             'фалафель': ['фалафель', 'falafel'],
             'шаурма': ['шаурм', 'shawarma'],
-            'стейк': ['стейк', 'steak', ' мясо'],
+            'стейк': ['стейк', 'steak', ' м\'ясо'],
             'риба': [' риб', 'fish', 'лосось'],
-            'курка': [' курк', 'курич', 'chicken'],
+            'курка': [' курк', 'куряч', 'chicken'],
             'десерт': ['десерт', 'торт', 'тірамісу', 'морозиво']
         }
         
@@ -521,13 +744,16 @@ class RestaurantBot:
             
             # ТРЬОХЕТАПНА ФІЛЬТРАЦІЯ для максимальної точності:
             
-            # 1. Спочатку фільтруємо за ТИПОМ ЗАКЛАДУ (ресторан/кав'ярня/доставка/to-go)
-            type_filtered = self._filter_by_establishment_type(user_request, shuffled_restaurants)
+            # 1. Спочатку фільтруємо за ТИПОМ ЗАКЛАДУ (покращено!)
+            if ENHANCED_SEARCH_CONFIG['enabled']:
+                type_filtered = self._enhanced_filter_by_establishment_type(user_request, shuffled_restaurants)
+            else:
+                type_filtered = self._filter_by_establishment_type(user_request, shuffled_restaurants)
             
-            # 2. Потім фільтруємо за КОНТЕКСТОМ (романтика/сім'я/друзі тощо)
+            # 2. Потім фільтруємо за КОНТЕКСТОМ
             context_filtered = self._filter_by_context(user_request, type_filtered)
             
-            # 3. Нарешті фільтруємо по МЕНЮ (якщо шукають конкретну страву)
+            # 3. Нарешті фільтруємо по МЕНЮ
             final_filtered = self._filter_by_menu(user_request, context_filtered)
             
             restaurants_details = []
@@ -595,45 +821,9 @@ class RestaurantBot:
             if recommendations:
                 return recommendations
             else:
-                logger.warning("⚠️ Не вдалось розпарсити відповідь OpenAI, використовую резервний алгоритм")
-                # Резервний варіант - беремо 2 найкращі за резервним алгоритмом
+                logger.warning("⚠️ Не вдалося розпарсити відповідь OpenAI, використовую резервний алгоритм")
                 return self._fallback_dual_selection(user_request, final_filtered)
             
-            def make_openai_request():
-                return openai_client.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "system", "content": "Ти експерт-ресторатор. Обирай варіанти різноманітно з УЖЕ ВІДФІЛЬТРОВАНОГО списку."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=200,
-                    temperature=0.4,
-                    top_p=0.9
-                )
-            
-            response = await asyncio.wait_for(
-                asyncio.to_thread(make_openai_request),
-                timeout=20
-            )
-            
-            choice_text = response.choices[0].message.content.strip()
-            logger.info(f"🤖 OpenAI повна відповідь: '{choice_text}'")
-            
-            numbers = re.findall(r'\d+', choice_text)
-            
-            if numbers:
-                choice_num = int(numbers[0]) - 1
-                logger.info(f"🔍 Знайдено число в відповіді: {numbers[0]} → індекс {choice_num}")
-                
-                if 0 <= choice_num < len(final_filtered):
-                    chosen_restaurant = final_filtered[choice_num]
-                    logger.info(f"✅ OpenAI обрав ВІДФІЛЬТРОВАНИЙ ресторан: {chosen_restaurant.get('name', '')} (варіант {choice_num + 1} з {len(final_filtered)})")
-                else:
-                    logger.warning(f"⚠️ Число {choice_num + 1} поза межами, використовую резервний алгоритм")
-                    chosen_restaurant = self._smart_fallback_selection(user_request, final_filtered)
-            else:
-                logger.warning("⚠️ Не знайдено чисел в відповіді, використовую резервний алгоритм")
-                chosen_restaurant = self._smart_fallback_selection(user_request, final_filtered)
         except asyncio.TimeoutError:
             logger.error("⏰ Timeout при запиті до OpenAI, використовую резервний алгоритм")
             return self._fallback_dual_selection(user_request, self.restaurants_data)
@@ -819,86 +1009,10 @@ class RestaurantBot:
         logger.info(f"🎯 Резервний алгоритм: обрано {len(result['restaurants'])} ресторанів")
         return result
 
-    def _smart_fallback_selection(self, user_request: str, restaurant_list):
-        """Резервний алгоритм з рандомізацією"""
-        import random
-        
-        user_lower = user_request.lower()
-        
-        keywords_map = {
-            'romantic': (['романт', 'побачен', 'двох', 'інтимн', 'затишн'], ['інтимн', 'романт', 'для пар', 'затишн']),
-            'family': (['сім', 'діт', 'родин', 'батьк'], ['сімейн', 'діт', 'родин']),
-            'business': (['діл', 'зустріч', 'перегов', 'бізнес'], ['діл', 'зустріч', 'бізнес']),
-            'friends': (['друз', 'компан', 'гуртом', 'весел'], ['компан', 'друз', 'молодіжн']),
-            'quick': (['швидк', 'перекус', 'фаст', 'поспіша'], ['швидк', 'casual', 'фаст']),
-            'celebration': (['святкув', 'день народж', 'ювіле', 'свято'], ['святков', 'простор', 'груп'])
-        }
-        
-        scored_restaurants = []
-        for restaurant in restaurant_list:
-            score = 0
-            restaurant_text = f"{restaurant.get('vibe', '')} {restaurant.get('aim', '')} {restaurant.get('cuisine', '')}".lower()
-            
-            for category, (user_keywords, restaurant_keywords) in keywords_map.items():
-                user_match = any(keyword in user_lower for keyword in user_keywords)
-                if user_match:
-                    restaurant_match = any(keyword in restaurant_text for keyword in restaurant_keywords)
-                    if restaurant_match:
-                        score += 5
-                    
-            score += random.uniform(0, 2)
-            scored_restaurants.append((score, restaurant))
-        
-        scored_restaurants.sort(key=lambda x: x[0], reverse=True)
-        
-        if scored_restaurants[0][0] > 0:
-            top_candidates = scored_restaurants[:min(3, len(scored_restaurants))]
-            chosen = random.choice(top_candidates)[1]
-            logger.info(f"🎯 Резервний алгоритм обрав: {chosen.get('name', '')} (випадково з ТОП-3)")
-            return chosen
-        else:
-            chosen = random.choice(restaurant_list)
-            logger.info(f"🎲 Резервний алгоритм: випадковий вибір - {chosen.get('name', '')}")
-            return chosen
-
-    def _fallback_selection_dict(self, user_request: str):
-        """Резервний алгоритм що повертає словник"""
-        if not self.restaurants_data:
-            logger.error("❌ Немає даних про ресторани для fallback")
-            return {
-                "name": "Ресторан недоступний",
-                "address": "Спробуйте пізніше",
-                "socials": "",
-                "vibe": "",
-                "aim": "",
-                "cuisine": "",
-                "menu": "",
-                "menu_url": "",
-                "photo": ""
-            }
-            
-        chosen = self._smart_fallback_selection(user_request, self.restaurants_data)
-        
-        photo_url = chosen.get('photo', '')
-        if photo_url:
-            photo_url = self._convert_google_drive_url(photo_url)
-        
-        return {
-            "name": chosen.get('name', 'Ресторан'),
-            "address": chosen.get('address', 'Адреса не вказана'),
-            "socials": chosen.get('socials', 'Соц-мережі не вказані'),
-            "vibe": chosen.get('vibe', 'Приємна атмосфера'),
-            "aim": chosen.get('aim', 'Для будь-яких подій'),
-            "cuisine": chosen.get('cuisine', 'Смачна кухня'),
-            "menu": chosen.get('menu', ''),
-            "menu_url": chosen.get('menu_url', ''),
-            "photo": photo_url
-        }
-
     async def log_request(self, user_id: int, user_request: str, restaurant_name: str, rating: Optional[int] = None, explanation: str = ""):
         """Логування запиту до аналітичної таблиці"""
         if not self.analytics_sheet:
-            logger.warning("Analytics sheet не доступний")
+            logger.warning("Analytics sheet недоступний")
             return
             
         try:
@@ -972,7 +1086,8 @@ class RestaurantBot:
         except Exception as e:
             logger.error(f"Помилка оновлення статистики: {e}")
 
-restaurant_bot = RestaurantBot()
+# Глобальний екземпляр покращеного бота
+restaurant_bot = EnhancedRestaurantBot()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробник команди /start"""
@@ -1058,7 +1173,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if current_state == "waiting_request":
         user_request = user_text
-        logger.info(f"🔍 Користувач {user_id} написав: {user_request}")
+        logger.info(f"📝 Користувач {user_id} написав: {user_request}")
         
         processing_message = await update.message.reply_text("🔍 Шукаю ідеальний ресторан для вас...")
         
@@ -1137,12 +1252,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         caption=response_text,
                         parse_mode='HTML'
                     )
-                    logger.info(f"✅ Надіслано рекомендації з фото: {main_restaurant['name']}")
+                    logger.info(f"✅ Надіслано рекомендацію з фото: {main_restaurant['name']}")
                 except Exception as photo_error:
-                    logger.warning(f"⚠️ Не вдалося надіслати фото: {photo_error}")
+                    logger.warning(f"⚠️ Не вдалось надіслати фото: {photo_error}")
                     response_text += f"\n\n📸 <a href='{main_photo_url}'>Переглянути фото пріоритетного ресторану</a>"
                     await update.message.reply_text(response_text, parse_mode='HTML')
-                    logger.info(f"✅ Надіслано рекомендації з посиланням на фото: {main_restaurant['name']}")
+                    logger.info(f"✅ Надіслано рекомендацію з посиланням на фото: {main_restaurant['name']}")
             else:
                 await update.message.reply_text(response_text, parse_mode='HTML')
                 logger.info(f"✅ Надіслано текстові рекомендації: {main_restaurant['name']}")
@@ -1190,15 +1305,25 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Недостатньо даних для статистики")
             return
         
+        # Додаємо інформацію про покращення
+        enhanced_status = "✅ Увімкнено" if ENHANCED_SEARCH_CONFIG['enabled'] else "❌ Вимкнено"
+        fuzzy_status = "✅ Увімкнено" if (ENHANCED_SEARCH_CONFIG['fuzzy_matching'] and FUZZY_AVAILABLE) else "❌ Вимкнено"
+        
         stats_text = f"""📊 <b>Статистика бота</b>
 
 📈 Загальна кількість запитів: <b>{summary_data[1][1]}</b>
 👥 Кількість унікальних користувачів: <b>{summary_data[2][1]}</b>
 ⭐ Середня оцінка відповідності: <b>{summary_data[3][1]}</b>
-🔢 Кількість оцінок: <b>{summary_data[4][1]}</b>
+📢 Кількість оцінок: <b>{summary_data[4][1]}</b>
 📊 Середня кількість запитів на користувача: <b>{summary_data[5][1]}</b>
 
-🕐 Останнє оновлення: {summary_data[1][2]}"""
+🔧 <b>Покращений пошук:</b>
+• Статус: {enhanced_status}
+• Fuzzy matching: {fuzzy_status}
+• Negation detection: {'✅' if ENHANCED_SEARCH_CONFIG['negation_detection'] else '❌'}
+• Regex boundaries: {'✅' if ENHANCED_SEARCH_CONFIG['regex_boundaries'] else '❌'}
+
+🕐 Остання оновлення: {summary_data[1][2]}"""
         
         await update.message.reply_text(stats_text, parse_mode='HTML')
         
@@ -1224,7 +1349,7 @@ def main():
         logger.error("❌ GOOGLE_SHEET_URL не встановлений!")
         return
     
-    logger.info("🚀 Запускаю оновлений бота...")
+    logger.info("🚀 Запускаю покращений бота...")
     
     try:
         loop = asyncio.new_event_loop()
@@ -1241,12 +1366,19 @@ def main():
         logger.info("🔗 Підключаюся до Google Sheets...")
         loop.run_until_complete(restaurant_bot.init_google_sheets())
         
-        logger.info("✅ Всі сервіси підключено! Бот готовий до роботи!")
+        # Логуємо конфігурацію покращеного пошуку
+        logger.info(f"🔧 Конфігурація покращеного пошуку: {ENHANCED_SEARCH_CONFIG}")
+        if FUZZY_AVAILABLE:
+            logger.info("✅ Fuzzy matching доступний")
+        else:
+            logger.warning("⚠️ Fuzzy matching недоступний - встановіть fuzzywuzzy: pip install fuzzywuzzy")
+        
+        logger.info("✅ Всі сервіси підключено! Покращений бот готовий до роботи!")
         
         loop.run_until_complete(application.run_polling(drop_pending_updates=True))
         
     except KeyboardInterrupt:
-        logger.info("🛑 Бот зупинено користувачем")
+        logger.info("🛑 Бота зупинено користувачем")
     except Exception as e:
         logger.error(f"❌ Критична помилка: {e}")
     finally:
