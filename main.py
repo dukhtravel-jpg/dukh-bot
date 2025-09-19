@@ -1480,17 +1480,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_states[user_id] = "waiting_request"
     
-    message = (
-        "🍽 Привіт! Я допоможу тобі знайти ідеальний ресторан!\n\n"
-        "Розкажи мені про своє побажання. Наприклад:\n"
-        "• 'Хочу місце для обіду з сім'єю'\n"
-        "• 'Потрібен ресторан для побачення'\n"
-        "• 'Шукаю піцу з друзями'\n\n"
-        "Напиши, що ти шукаєш! 😊"
-    )
+    message = """🍽 <b>Вітаю в Restaurant Bot!</b>
+
+Я допоможу знайти ідеальний заклад для будь-якої ситуації!
+
+<b>Просто напишіть що шукаєте:</b>
+• "Романтичний ресторан для побачення"
+• "Кав'ярня де можна працювати"  
+• "Піца з друзями"
+• "Де випити матчу?"
+
+<b>Корисні команди:</b>
+/help - Детальна інструкція
+/list_restaurants - Всі заклади за типами
+
+<b>Готові почати?</b> Опишіть що шукаєте! ✨"""
     
-    await update.message.reply_text(message)
-    logger.info(f"✅ Користувач {user_id} почав діалог")
+    await update.message.reply_text(message, parse_mode='HTML')
+    logger.info(f"Користувач {user_id} почав діалог")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробник текстових повідомлень"""
@@ -1561,7 +1568,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_request = user_text
         logger.info(f"🔍 Користувач {user_id} написав: {user_request}")
         
-        processing_message = await update.message.reply_text("🔍 Шукаю ідеальний ресторан для вас...")
+        # Показуємо красивий прогрес обробки
+        processing_message = await show_processing_status(update, context, user_request)
         
         recommendation = await restaurant_bot.get_recommendation(user_request)
         
@@ -1573,10 +1581,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if recommendation:
             # Перевіряємо чи це повідомлення про відсутність страви
             if recommendation.get("dish_not_found"):
-                await update.message.reply_text(
-                    f"😔 {recommendation['message']}\n\n"
-                    f"Спробуй знайти щось інше або напиши /start для нового пошуку!"
-                )
+                not_found_message = f"""😔 <b>Страву не знайдено</b>
+
+{recommendation['message']}
+
+💡 <b>Поради:</b>
+• Спробуйте інші варіанти: піца, суші, паста, салати
+• Або опишіть атмосферу: "романтичне місце", "кав'ярня для роботи"
+• Використайте /list_restaurants для перегляду всіх закладів
+
+Напишіть новий запит або /start для початку! 🔄"""
+                
+                await update.message.reply_text(not_found_message, parse_mode='HTML')
                 logger.info(f"❌ Повідомлено користувачу {user_id} про відсутність страви: {recommendation['missing_dishes']}")
                 return
             
@@ -1596,40 +1612,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Формуємо повідомлення з двома варіантами
             if len(restaurants) == 1:
                 # Якщо тільки один варіант
-                response_text = f"""🏠 <b>Рекомендую цей заклад:</b>
+                response_text = f"""🎯 <b>Ідеальний варіант для вас!</b>
 
-<b>{restaurants[0]['name']}</b>
-📍 {restaurants[0]['address']}
-🏢 Тип: {restaurants[0]['type']}
-📱 Соц-мережі: {restaurants[0]['socials']}
-✨ Атмосфера: {restaurants[0]['vibe']}
-🎯 Підходить для: {restaurants[0]['aim']}"""
+🏠 <b>{restaurants[0]['name']}</b>
+📍 <i>{restaurants[0]['address']}</i>
+🏢 <b>Тип:</b> {restaurants[0]['type']}
+✨ <b>Атмосфера:</b> {restaurants[0]['vibe']}
+🎯 <b>Підходить для:</b> {restaurants[0]['aim']}
+🍽️ <b>Кухня:</b> {restaurants[0]['cuisine']}
+
+📱 <b>Соц-мережі:</b> {restaurants[0]['socials']}"""
             else:
                 # Якщо два варіанти
                 priority_restaurant = restaurants[priority_index]
                 alternative_restaurant = restaurants[1 - priority_index]
                 
-                response_text = f"""🎯 <b>2 найкращі варіанти для вас:</b>
+                response_text = f"""🎯 <b>Топ-2 варіанти спеціально для вас:</b>
 
-<b>🏆 ПРІОРИТЕТНА РЕКОМЕНДАЦІЯ:</b>
-<b>{priority_restaurant['name']}</b>
-📍 {priority_restaurant['address']}
-🏢 Тип: {priority_restaurant['type']}
-📱 Соц-мережі: {priority_restaurant['socials']}
-✨ Атмосфера: {priority_restaurant['vibe']}
-🎯 Підходить для: {priority_restaurant['aim']}
+🏆 <b>ГОЛОВНА РЕКОМЕНДАЦІЯ:</b>
+🏠 <b>{priority_restaurant['name']}</b>
+📍 <i>{priority_restaurant['address']}</i>
+🏢 <b>Тип:</b> {priority_restaurant['type']}
+✨ <b>Атмосфера:</b> {priority_restaurant['vibe']}
+🎯 <b>Підходить для:</b> {priority_restaurant['aim']}
+🍽️ <b>Кухня:</b> {priority_restaurant['cuisine']}
+📱 <b>Контакти:</b> {priority_restaurant['socials']}
 
-💡 <i>Чому пріоритет: {priority_explanation}</i>
+💡 <b>Чому рекомендую:</b> <i>{priority_explanation}</i>
 
 ➖➖➖➖➖➖➖➖➖➖
 
-<b>🥈 АЛЬТЕРНАТИВНИЙ ВАРІАНТ:</b>
-<b>{alternative_restaurant['name']}</b>
-📍 {alternative_restaurant['address']}
-🏢 Тип: {alternative_restaurant['type']}
-📱 Соц-мережі: {alternative_restaurant['socials']}
-✨ Атмосфера: {alternative_restaurant['vibe']}
-🎯 Підходить для: {alternative_restaurant['aim']}"""
+🥈 <b>АЛЬТЕРНАТИВНИЙ ВАРІАНТ:</b>
+🏠 <b>{alternative_restaurant['name']}</b>
+📍 <i>{alternative_restaurant['address']}</i>
+🏢 <b>Тип:</b> {alternative_restaurant['type']}
+✨ <b>Атмосфера:</b> {alternative_restaurant['vibe']}
+🎯 <b>Підходить для:</b> {alternative_restaurant['aim']}
+🍽️ <b>Кухня:</b> {alternative_restaurant['cuisine']}
+📱 <b>Контакти:</b> {alternative_restaurant['socials']}"""
 
             # Додаємо посилання на меню для пріоритетного ресторану
             main_menu_url = main_restaurant.get('menu_url', '')
@@ -1658,17 +1678,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info(f"✅ Надіслано текстові рекомендації: {main_restaurant['name']}")
             
             # Просимо оцінити ПРІОРИТЕТНИЙ варіант
-            rating_text = f"""⭐ <b>Оціни ПРІОРИТЕТНУ рекомендацію від 1 до 10</b>
-(оцінюємо "{main_restaurant['name']}")
+            rating_text = f"""⭐ <b>Оцініть головну рекомендацію</b>
 
-1 - зовсім не підходить
-10 - ідеально підходить
+🎯 <b>Оцінюємо:</b> "{main_restaurant['name']}"
 
-Напиши цифру в чаті 👇"""
+<b>Шкала оцінки:</b>
+1-3: Зовсім не підходить
+4-6: Частково підходить  
+7-8: Добре підходить
+9-10: Ідеально підходить
+
+<b>Напишіть число від 1 до 10:</b> 👇
+
+💡 <i>Ваші оцінки допомагають боту краще розуміти ваші вподобання!</i>"""
             await update.message.reply_text(rating_text, parse_mode='HTML')
             
         else:
-            await update.message.reply_text("Вибачте, не знайшов закладів з потрібними стравами. Спробуйте змінити запит або вказати конкретну страву.")
+            no_results_message = """😔 <b>Нічого не знайдено</b>
+
+На жаль, не знайшов закладів що відповідають вашому запиту.
+
+💡 <b>Спробуйте:</b>
+• Змінити критерії пошуку
+• Використати загальніші терміни  
+• Переглянути всі заклади: /list_restaurants
+• Отримати поради: /help
+
+🔄 <b>Або напишіть новий запит!</b>"""
+            
+            await update.message.reply_text(no_results_message, parse_mode='HTML')
             logger.warning(f"⚠️ Не знайдено рекомендацій для користувача {user_id}")
     
     else:
@@ -1679,7 +1717,167 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("Напишіть /start, щоб почати знову")
 
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /help - повна довідка по використанню бота"""
+    help_text = """🤖 <b>Довідка по Restaurant Bot</b>
+
+<b>🎯 Як користуватися ботом:</b>
+Просто напишіть що ви шукаєте природною мовою!
+
+<b>📝 Приклади запитів:</b>
+• "Хочу піцу з друзями"
+• "Потрібен ресторан для побачення"
+• "Де можна випити матчу?"
+• "Сімейне місце для обіду"
+• "Швидко перекусити"
+• "Італійська кухня в центрі"
+
+<b>🔍 Що бот розуміє:</b>
+• <i>Страви:</i> піца, суші, паста, мідії, стейк та ін.
+• <i>Атмосферу:</i> романтично, сімейно, весело, затишно
+• <i>Призначення:</i> побачення, друзі, робота, святкування
+• <i>Типи:</i> ресторан, кав'ярня, доставка, to-go
+• <i>Кухню:</i> італійська, японська, грузинська та ін.
+
+<b>⭐ Оцінювання:</b>
+Після кожної рекомендації оцініть її від 1 до 10
+Це допоможе покращити майбутні пропозиції!
+
+<b>📋 Доступні команди:</b>
+/start - Почати пошук ресторану
+/help - Ця довідка
+/list_restaurants - Список всіх закладів
+/stats - Статистика (тільки для адмінів)
+
+<b>💡 Поради:</b>
+• Будьте конкретними: "романтичний італійський ресторан"
+• Вказуйте контекст: "з дітьми", "для роботи"  
+• Згадуйте побажання: "з терасою", "в центрі"
+
+Готові знайти ідеальне місце? Напишіть свій запит! 🍽️"""
+
+    await update.message.reply_text(help_text, parse_mode='HTML')
+    logger.info(f"📖 Користувач {update.effective_user.id} запросив довідку")
+
+async def list_restaurants_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /list_restaurants - список всіх ресторанів згрупований за типами"""
+    user_id = update.effective_user.id
+    
+    if not restaurant_bot.restaurants_data:
+        await update.message.reply_text("❌ База даних ресторанів недоступна")
+        return
+    
+    # Групуємо ресторани за типами
+    grouped_restaurants = {}
+    for restaurant in restaurant_bot.restaurants_data:
+        establishment_type = restaurant.get('тип закладу', restaurant.get('type', 'Інше'))
+        if not establishment_type or establishment_type.strip() == '':
+            establishment_type = 'Інше'
+        
+        if establishment_type not in grouped_restaurants:
+            grouped_restaurants[establishment_type] = []
+        
+        grouped_restaurants[establishment_type].append(restaurant)
+    
+    # Формуємо красиве повідомлення
+    message_parts = ["🏢 <b>Всі заклади за типами:</b>\n"]
+    
+    # Сортуємо типи за кількістю закладів (найбільше спочатку)
+    sorted_types = sorted(grouped_restaurants.items(), key=lambda x: len(x[1]), reverse=True)
+    
+    for establishment_type, restaurants in sorted_types:
+        count = len(restaurants)
+        
+        # Іконки для різних типів
+        icon = {
+            'ресторан': '🍽️',
+            'кав\'ярня': '☕',
+            'кафе': '☕',
+            'доставка': '🚚',
+            'delivery': '🚚',
+            'to-go': '🥡',
+            'takeaway': '🥡',
+            'бар': '🍸'
+        }.get(establishment_type.lower(), '🏪')
+        
+        message_parts.append(f"\n{icon} <b>{establishment_type.upper()}</b> ({count})")
+        
+        # Додаємо перші 5 ресторанів кожного типу
+        for i, restaurant in enumerate(restaurants[:5]):
+            name = restaurant.get('name', 'Без назви')
+            cuisine = restaurant.get('cuisine', '')
+            if cuisine:
+                message_parts.append(f"   • {name} <i>({cuisine})</i>")
+            else:
+                message_parts.append(f"   • {name}")
+        
+        # Якщо ресторанів більше 5, показуємо "..."
+        if count > 5:
+            message_parts.append(f"   • ... та ще {count - 5}")
+    
+    total_count = len(restaurant_bot.restaurants_data)
+    message_parts.append(f"\n📊 <b>Загалом:</b> {total_count} закладів")
+    message_parts.append(f"🔍 Для пошуку просто напишіть що шукаєте!")
+    
+    full_message = '\n'.join(message_parts)
+    
+    # Перевіряємо довжину повідомлення (Telegram ліміт ~4096 символів)
+    if len(full_message) > 4000:
+        # Якщо занадто довге, відправляємо скорочену версію
+        short_message_parts = ["🏢 <b>Заклади за типами (скорочено):</b>\n"]
+        for establishment_type, restaurants in sorted_types:
+            count = len(restaurants)
+            icon = {
+                'ресторан': '🍽️',
+                'кав\'ярня': '☕',
+                'кафе': '☕',
+                'доставка': '🚚',
+                'to-go': '🥡',
+                'бар': '🍸'
+            }.get(establishment_type.lower(), '🏪')
+            short_message_parts.append(f"{icon} <b>{establishment_type}</b>: {count} закладів")
+        
+        short_message_parts.append(f"\n📊 <b>Загалом:</b> {total_count} закладів")
+        short_message_parts.append(f"🔍 Для детального списку зверніться до адміністратора")
+        
+        full_message = '\n'.join(short_message_parts)
+    
+    await update.message.reply_text(full_message, parse_mode='HTML')
+    logger.info(f"📋 Користувач {user_id} запросив список ресторанів")
+
+async def show_processing_status(update: Update, context: ContextTypes.DEFAULT_TYPE, user_request: str):
+    """Показує прогресивні статусні повідомлення під час обробки"""
+    status_messages = [
+        "🔍 Аналізую ваш запит...",
+        "🧠 Розумію ваші побажання...", 
+        "📊 Шукаю найкращі варіанти...",
+        "🎯 Фільтрую за критеріями...",
+        "🤖 Консультуюся з AI експертом...",
+        "✨ Готую персональні рекомендації..."
+    ]
+    
+    import asyncio
+    processing_message = await update.message.reply_text(status_messages[0])
+    
+    try:
+        # Показуємо прогрес (швидко змінюємо статуси)
+        for i, status in enumerate(status_messages[1:], 1):
+            await asyncio.sleep(0.8)  # Короткі паузи для кращого UX
+            try:
+                await processing_message.edit_text(status)
+            except:
+                # Якщо не вдалося редагувати, пропускаємо
+                pass
+        
+        # Фінальний статус
+        await asyncio.sleep(0.5)
+        await processing_message.edit_text("🎉 Готово! Ось найкращі варіанти для вас:")
+        
+        return processing_message
+        
+    except Exception as e:
+        logger.warning(f"⚠️ Помилка показу статусу: {e}")
+        return processing_message
     """Команда для перегляду статистики"""
     user_id = update.effective_user.id
     
@@ -1751,10 +1949,15 @@ def main():
         asyncio.set_event_loop(loop)
         
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        logger.info("✅ Telegram додаток створено успішно!")
+        logger.info("Telegram додаток створено успішно!")
         
+        # Додаємо обробники команд
         application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("list_restaurants", list_restaurants_command))
         application.add_handler(CommandHandler("stats", stats_command))
+        
+        # Додаємо обробник текстових повідомлень
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         application.add_error_handler(error_handler)
         
