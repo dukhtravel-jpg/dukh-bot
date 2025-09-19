@@ -1,4 +1,30 @@
-import logging
+await update.message.reply_text(full_message, parse_mode='HTML')
+    logger.info(f"📋 Користувач {user_id} запросив список ресторанів")
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда для перегляду статистики"""
+    user_id = update.effective_user.id
+    
+    admin_ids = [123456789]
+    
+    if user_id not in admin_ids:
+        await update.message.reply_text("У вас немає доступу до статистики")
+        return
+    
+    try:
+        if not restaurant_bot.summary_sheet:
+            await update.message.reply_text("Статистика недоступна")
+            return
+        
+        summary_data = restaurant_bot.summary_sheet.get_all_values()
+        
+        if len(summary_data) < 6:
+            await update.message.reply_text("Недостатньо даних для статистики")
+            return
+        
+        # Додаємо інформацію про покращення
+        enhanced_status = "✅ Увімкнено" if ENHANCED_SEARCH_CONFIG['enabled'] else "❌ Вимкнено"
+        fuzzy_status = "✅ Увімкнено" if (ENHANCED_SEARCH_CONFIG['import logging
 import os
 from typing import Dict, Optional, List, Tuple
 import asyncio
