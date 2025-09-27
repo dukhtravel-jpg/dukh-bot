@@ -120,6 +120,24 @@ class EnhancedRestaurantBot:
             worksheet = google_sheet.sheet1
             
             records = worksheet.get_all_records()
+
+    async def refresh_restaurants_data(self):
+    """Оновлення даних ресторанів з Google Sheets"""
+    try:
+        if not self.gc:
+            await self.init_google_sheets()
+            return
+        
+        google_sheet = self.gc.open_by_url(GOOGLE_SHEET_URL)
+        worksheet = google_sheet.sheet1
+        records = worksheet.get_all_records()
+        
+        if records:
+            self.restaurants_data = records
+            logger.info(f"🔄 Оновлено {len(self.restaurants_data)} закладів з Google Sheets")
+        
+    except Exception as e:
+        logger.error(f"Помилка оновлення даних: {e}")
             
             if records:
                 self.restaurants_data = records
@@ -1047,8 +1065,14 @@ class EnhancedRestaurantBot:
     async def get_recommendation(self, user_request: str) -> Optional[Dict]:
         """Отримання рекомендації через OpenAI з урахуванням типу закладу, контексту та меню"""
         try:
-            global openai_client
-            if openai_client is None:
+
+            async def get_recommendation(self, user_request: str) -> Optional[Dict]:
+    """Отримання рекомендації через OpenAI з урахуванням типу закладу, контексту та меню"""
+    try:
+        await self.refresh_restaurants_data()
+        
+        global openai_client
+        if openai_client is None:
                 import openai
                 openai.api_key = OPENAI_API_KEY
                 openai_client = openai
